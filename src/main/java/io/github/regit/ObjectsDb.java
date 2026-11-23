@@ -11,7 +11,10 @@ final class ObjectsDb {
     record Value(String type, byte[] data) {}
     private final Path objects;
     private final PackedObjects packed;
-    ObjectsDb(Path common) {
+    private final ObjectsDb fallback;
+    ObjectsDb(Path common) { this(common, null); }
+    ObjectsDb(Path common, ObjectsDb fallback) {
+        this.fallback = fallback;
         objects = common.resolve("objects");
         packed = new PackedObjects(objects);
     }
@@ -89,6 +92,7 @@ final class ObjectsDb {
         Path loose = file(hash);
         if (Files.notExists(loose)) {
             var location = packed.locate(hash);
+            if (location == null && fallback != null) return fallback.get(hash);
             if (location == null) throw new IOException("Missing object " + hash);
             var value = packed.read(location, this);
             var sha = digest();
@@ -136,5 +140,5 @@ final class ObjectsDb {
             Files.move(tmp, dest, StandardCopyOption.ATOMIC_MOVE);
         } finally { Files.deleteIfExists(tmp); }
     }
-    boolean contains(String hash) throws IOException { return Files.isRegularFile(file(hash)) || packed.locate(hash) != null; }
+    boolean contains(String hash) throws IOException { return Files.isRegularFile(file(hash)) || packed.locate(hash) != null || (fallback != null && fallback.contains(hash)); }
 }

@@ -55,6 +55,34 @@ For HTTP(S), pass a `SmartHttpRemote` constructed with the repository URI and a 
 
 `merge(source, committer, message)` fast-forwards when possible and otherwise writes a two-parent merge commit. `rebase(onto, committer)` replays a linear topic in oldest-first order, preserving original authors and messages. Both handle additions, deletions, executable bits and separated edits in UTF-8 text. An unresolved path raises `MergeConflict` before publishing any ref or changing the checkout. The default content strategy bounds its diff calculation to one million cells per side after trimming common lines.
 
+## Host a bare repository
+
+A bare repository stores shared objects and refs and has no working directory or staging area of its own. Use `Repository.initBare` once to provision it, then `Repository.open` on restart. `isBare()` identifies a bare handle. Each HTTP context maps directly to one repository handle.
+
+```java
+import com.sun.net.httpserver.HttpServer;
+import io.github.regit.GitHttpHandler;
+import io.github.regit.Repository;
+import java.net.InetSocketAddress;
+import java.nio.file.Path;
+
+var central = Repository.initBare(Path.of("repos/team.git"), "main");
+var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 8080), 0);
+server.createContext("/team.git", central.httpHandler(GitHttpHandler.Access.READ_WRITE));
+server.start();
+```
+
+From an existing checkout with a commit on `main`, populate the server and clone it with native Git:
+
+```sh
+git push http://127.0.0.1:8080/team.git main
+git clone http://127.0.0.1:8080/team.git team-copy
+```
+
+The handler serves smart HTTP v0 ref advertisements, upload-pack for clone/fetch and receive-pack for push. A clone discovers the default branch from HEAD. Select `READ_ONLY` for a fetch-only context. `READ_WRITE` grants everyone admitted to that context permission to push. Applications exposing the service to other machines supply authentication and TLS via the JDK HTTP context/server or a reverse proxy. The application owns the executor, server lifetime and repository backups.
+
+Push accepts one branch creation or fast-forward per request. Received objects are unpacked in a temporary database. The handler checks the expected old tip, linked-worktree ownership and the new commit graph before publishing the ref. A configured repository lifecycle receives a PUSH event for the destination branch. The server currently hosts SHA-1 branch refs. Tags, remote branch deletion, multi-ref pushes, shallow clones and SSH serving are outside its scope. Receive requests allow up to 256 MiB of decoded HTTP body, 100,000 pack records and 1 GiB of reconstructed object data per push.
+
 ## Extension points
 
 `withLifecycle(hook)` and `withContentMerge(strategy)` return configured handles. New linked worktrees inherit these settings. A lifecycle event includes the operation, repository location and target. A policy can veto in `before` by throwing `IOException`. The `after` callback runs after successful completion and lock release. An exception from that callback reaches the caller after the operation has taken effect. Internal fetch and merge steps of a pull produce a single pull event.

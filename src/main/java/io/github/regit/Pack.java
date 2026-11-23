@@ -138,6 +138,9 @@ final class Pack {
         sink.write(sha.digest());
     }
     static void unpack(InputStream response, ObjectsDb db) throws IOException {
+        unpack(response, db, Integer.MAX_VALUE, Long.MAX_VALUE);
+    }
+    static void unpack(InputStream response, ObjectsDb db, int maxRecords, long maxExpandedBytes) throws IOException {
         Path tmp = Files.createTempFile("regit-fetch-", ".pack");
         try {
             Files.copy(response, tmp, StandardCopyOption.REPLACE_EXISTING);
@@ -156,34 +159,41 @@ final class Pack {
                 in.seek(0);
                 if (in.readInt() != MAGIC) throw new IOException("Missing pack signature");
                 int version = in.readInt(), count = in.readInt();
-                if ((version != 2 && version != 3) || count < 0) throw new IOException("Invalid pack header");
+                if ((version != 2 && version != 3) || count < 0 || count > maxRecords) throw new IOException("Invalid pack header");
                 var byOffset = new HashMap<Long, String>();
                 List<Long> pending = new ArrayList<>();
                 for (int i = 0; i < count; i++) {
                     long offset = in.getFilePointer();
-                    if (!install(read(in, offset), offset, byOffset, db)) pending.add(offset);
+                    int size = install(read(in, offset), offset, byOffset, db, maxExpandedBytes);
+                    if (size < 0) pending.add(offset);
+                    else maxExpandedBytes -= size;
                 }
                 if (in.getFilePointer() != in.length() - 20) throw new IOException("Unexpected pack tail");
                 while (!pending.isEmpty()) {
                     int before = pending.size();
                     for (var it = pending.iterator(); it.hasNext();) {
                         long offset = it.next();
-                        if (install(read(in, offset), offset, byOffset, db)) it.remove();
+                        int size = install(read(in, offset), offset, byOffset, db, maxExpandedBytes);
+                        if (size >= 0) {
+                            maxExpandedBytes -= size;
+                            it.remove();
+                        }
                     }
                     if (pending.size() == before) throw new IOException("Missing delta base");
                 }
             }
         } finally { Files.deleteIfExists(tmp); }
     }
-    private static boolean install(Record record, long offset, Map<Long,String> ids, ObjectsDb db) throws IOException {
+    private static int install(Record record, long offset, Map<Long,String> ids, ObjectsDb db, long budget) throws IOException {
         ObjectsDb.Value base = null;
         if (record.delta()) {
             String hash = record.baseId() == null ? ids.get(record.baseOffset()) : record.baseId();
-            if (hash == null || !db.contains(hash)) return false;
+            if (hash == null || !db.contains(hash)) return -1;
             base = db.get(hash);
         }
         var value = record.resolve(base);
+        if (value.data().length > budget) throw new IOException("Expanded pack exceeds size limit");
         ids.put(offset, db.put(value.type(), value.data()));
-        return true;
+        return value.data().length;
     }
 }

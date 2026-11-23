@@ -18,7 +18,7 @@ final class Trees {
         for (var item : entries(db.read(tree, "tree")).entrySet()) {
             var name = prefix + item.getKey();
             if (item.getValue().mode() == Entry.TREE) flatten(item.getValue().hash(), name + "/", result);
-            else result.put(name, item.getValue());
+            else result.put(name, Entry.regular(item.getValue().mode(), item.getValue().hash()));
         }
     }
     static Map<String, Entry> entries(byte[] bytes) throws IOException {
@@ -37,6 +37,8 @@ final class Trees {
                 case "40000" -> Entry.TREE;
                 case "100644" -> Entry.FILE;
                 case "100755" -> Entry.EXEC;
+                case "120000" -> Entry.SYMLINK;
+                case "160000" -> Entry.GITLINK;
                 default -> throw new IOException("Unsupported tree entry mode");
             };
             String hash = HEX.formatHex(bytes, end + 1, end + 21);

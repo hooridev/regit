@@ -6,7 +6,7 @@ import java.util.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 record Entry(int mode, String hash) {
-    static final int FILE = 0100644, EXEC = 0100755, TREE = 0040000;
+    static final int FILE = 0100644, EXEC = 0100755, TREE = 0040000, SYMLINK = 0120000, GITLINK = 0160000;
     // UTF-8 byte order is Unicode scalar order. Avoid encoding both keys on every comparison.
     static final Comparator<String> BYTE_ORDER = (a, b) -> {
         int end = Math.min(a.length(), b.length());

@@ -31,6 +31,13 @@ public final class Repository {
     public static Repository open(Path directory) throws IOException {
         return new Repository(Layout.open(directory), DEFAULT, ContentMerge.text());
     }
+    public boolean isBare() { return layout.root() == null; }
+
+    /** Mount this bare repository at one JDK HTTP server context. The application owns authentication. */
+    public GitHttpHandler httpHandler(GitHttpHandler.Access access) throws IOException {
+        if (!isBare() || !layout.isBareCommon()) throw new IOException("Hosting requires a bare repository");
+        return new GitHttpHandler(layout, db, Objects.requireNonNull(access), lifecycle);
+    }
     public Repository withLifecycle(Lifecycle hook) {
         return new Repository(layout, Objects.requireNonNull(hook), contentMerge);
     }
