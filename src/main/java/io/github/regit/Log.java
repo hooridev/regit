@@ -19,10 +19,11 @@ public final class Log {
         TOPO
     }
 
-    sealed interface Target permits Target.Spec, Target.BranchRef, Target.CommitRef, Target.Symmetric {
+    sealed interface Target permits Target.Spec, Target.BranchRef, Target.CommitRefTarget, Target.RemoteBranchRef, Target.Symmetric {
         record Spec(String value) implements Target {}
         record BranchRef(Branch branch) implements Target {}
-        record CommitRef(Commit commit) implements Target {}
+        record CommitRefTarget(Commit commit) implements Target {}
+        record RemoteBranchRef(RemoteBranch branch) implements Target {}
         record Symmetric(Target left, Target right) implements Target {}
     }
 
@@ -103,29 +104,22 @@ public final class Log {
     /** Start from one or more commits. */
     public static Log from(Commit... commits) { return EMPTY.include(commits); }
 
+    /** Start from one or more remote-tracking branches. */
+    public static Log from(RemoteBranch... branches) { return EMPTY.include(branches); }
+
+    /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
+    public static Log range(CommitRef exclude, CommitRef include) {
+        return EMPTY.includeTarget(toTarget(include)).excludeTarget(toTarget(exclude));
+    }
+
     /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
     public static Log range(String exclude, String include) {
         return EMPTY.include(Objects.requireNonNull(include)).exclude(Objects.requireNonNull(exclude));
     }
 
-    /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
-    public static Log range(Branch exclude, Branch include) {
-        return EMPTY.include(Objects.requireNonNull(include)).exclude(Objects.requireNonNull(exclude));
-    }
-
-    /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
-    public static Log range(Commit exclude, Commit include) {
-        return EMPTY.include(Objects.requireNonNull(include)).exclude(Objects.requireNonNull(exclude));
-    }
-
-    /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
-    public static Log range(Commit exclude, Branch include) {
-        return EMPTY.include(Objects.requireNonNull(include)).exclude(Objects.requireNonNull(exclude));
-    }
-
-    /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
-    public static Log range(Branch exclude, Commit include) {
-        return EMPTY.include(Objects.requireNonNull(include)).exclude(Objects.requireNonNull(exclude));
+    /** Symmetric difference between any two {@link CommitRef} targets ({@code left...right}). */
+    public static Log symmetricRange(CommitRef left, CommitRef right) {
+        return symmetric(toTarget(left), toTarget(right));
     }
 
     /** Symmetric difference: commits reachable from either revision but not both ({@code left...right}). */
@@ -133,28 +127,27 @@ public final class Log {
         return EMPTY.include(Objects.requireNonNull(left) + "..." + Objects.requireNonNull(right));
     }
 
-    /** Symmetric difference between two branches ({@code left...right}). */
-    public static Log symmetricRange(Branch left, Branch right) {
-        return symmetric(new Target.BranchRef(Objects.requireNonNull(left)),
-                new Target.BranchRef(Objects.requireNonNull(right)));
+    private static Target toTarget(CommitRef ref) {
+        return switch (Objects.requireNonNull(ref, "ref")) {
+            case Commit c -> new Target.CommitRefTarget(c);
+            case Branch b -> new Target.BranchRef(b);
+            case RemoteBranch rb -> new Target.RemoteBranchRef(rb);
+            case CommitRef.Spec s -> new Target.Spec(s.expression());
+        };
     }
 
-    /** Symmetric difference between two commits ({@code left...right}). */
-    public static Log symmetricRange(Commit left, Commit right) {
-        return symmetric(new Target.CommitRef(Objects.requireNonNull(left)),
-                new Target.CommitRef(Objects.requireNonNull(right)));
+    private Log includeTarget(Target t) {
+        var next = new ArrayList<>(includes);
+        next.add(t);
+        return with(next, excludes, all, branches, tags, maxCount, skip, order, reverse, firstParent,
+                minParents, maxParents, authors, committers, greps, since, until, paths);
     }
 
-    /** Symmetric difference between a commit and a branch ({@code left...right}). */
-    public static Log symmetricRange(Commit left, Branch right) {
-        return symmetric(new Target.CommitRef(Objects.requireNonNull(left)),
-                new Target.BranchRef(Objects.requireNonNull(right)));
-    }
-
-    /** Symmetric difference between a branch and a commit ({@code left...right}). */
-    public static Log symmetricRange(Branch left, Commit right) {
-        return symmetric(new Target.BranchRef(Objects.requireNonNull(left)),
-                new Target.CommitRef(Objects.requireNonNull(right)));
+    private Log excludeTarget(Target t) {
+        var next = new ArrayList<>(excludes);
+        next.add(t);
+        return with(includes, next, all, branches, tags, maxCount, skip, order, reverse, firstParent,
+                minParents, maxParents, authors, committers, greps, since, until, paths);
     }
 
     private static Log symmetric(Target left, Target right) {
@@ -179,7 +172,14 @@ public final class Log {
 
     public Log include(Commit... commits) {
         var next = new ArrayList<>(includes);
-        for (Commit commit : Objects.requireNonNull(commits)) next.add(new Target.CommitRef(Objects.requireNonNull(commit)));
+        for (Commit commit : Objects.requireNonNull(commits)) next.add(new Target.CommitRefTarget(Objects.requireNonNull(commit)));
+        return with(next, excludes, all, branches, tags, maxCount, skip, order, reverse, firstParent,
+                minParents, maxParents, authors, committers, greps, since, until, paths);
+    }
+
+    public Log include(RemoteBranch... refs) {
+        var next = new ArrayList<>(includes);
+        for (RemoteBranch branch : Objects.requireNonNull(refs)) next.add(new Target.RemoteBranchRef(Objects.requireNonNull(branch)));
         return with(next, excludes, all, branches, tags, maxCount, skip, order, reverse, firstParent,
                 minParents, maxParents, authors, committers, greps, since, until, paths);
     }
@@ -200,7 +200,14 @@ public final class Log {
 
     public Log exclude(Commit... commits) {
         var next = new ArrayList<>(excludes);
-        for (Commit commit : Objects.requireNonNull(commits)) next.add(new Target.CommitRef(Objects.requireNonNull(commit)));
+        for (Commit commit : Objects.requireNonNull(commits)) next.add(new Target.CommitRefTarget(Objects.requireNonNull(commit)));
+        return with(includes, next, all, branches, tags, maxCount, skip, order, reverse, firstParent,
+                minParents, maxParents, authors, committers, greps, since, until, paths);
+    }
+
+    public Log exclude(RemoteBranch... refs) {
+        var next = new ArrayList<>(excludes);
+        for (RemoteBranch branch : Objects.requireNonNull(refs)) next.add(new Target.RemoteBranchRef(Objects.requireNonNull(branch)));
         return with(includes, next, all, branches, tags, maxCount, skip, order, reverse, firstParent,
                 minParents, maxParents, authors, committers, greps, since, until, paths);
     }

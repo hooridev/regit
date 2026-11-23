@@ -35,10 +35,18 @@ final class Revisions {
         return id;
     }
 
+    String resolveRemoteBranch(RemoteBranch branch) throws IOException {
+        String ref = branch.refNameIn(layout);
+        String id = readRef(ref, 0);
+        if (id == null) throw new IOException("Missing remote branch: " + branch.fullName());
+        return peelToCommit(id);
+    }
+
     String resolveCommit(CommitRef ref) throws IOException {
         return switch (Objects.requireNonNull(ref, "ref")) {
             case Commit c -> resolveCommitObject(c);
             case Branch b -> resolveBranch(b);
+            case RemoteBranch rb -> resolveRemoteBranch(rb);
             case CommitRef.Spec s -> resolveCommit(s.expression());
         };
     }

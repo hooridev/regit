@@ -6,7 +6,7 @@ import java.util.Objects;
  * A target that resolves to a Git commit: a {@link Commit}, a local {@link Branch},
  * or an explicit revision expression via {@link #of(String)}.
  */
-public sealed interface CommitRef permits Commit, Branch, CommitRef.Spec {
+public sealed interface CommitRef permits Commit, Branch, RemoteBranch, CommitRef.Spec {
     /** Wrap a Git revision expression (e.g. {@code "HEAD~2"}, {@code "v1.0"}, {@code "origin/main"}). */
     static CommitRef of(String revision) {
         return new Spec(revision);

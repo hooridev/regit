@@ -87,7 +87,8 @@ final class History {
             switch (target) {
                 case Log.Target.Spec s -> revisions.expandSpec(s.value(), includes, excludes, this);
                 case Log.Target.BranchRef b -> includes.add(revisions.resolveBranch(b.branch()));
-                case Log.Target.CommitRef c -> includes.add(revisions.resolveCommitObject(c.commit()));
+                case Log.Target.CommitRefTarget c -> includes.add(revisions.resolveCommitObject(c.commit()));
+                case Log.Target.RemoteBranchRef rb -> includes.add(revisions.resolveRemoteBranch(rb.branch()));
                 case Log.Target.Symmetric sym -> {
                     String leftId = resolveSingleTarget(sym.left(), revisions);
                     String rightId = resolveSingleTarget(sym.right(), revisions);
@@ -389,7 +390,8 @@ final class History {
         return switch (target) {
             case Log.Target.Spec s -> revisions.resolveCommit(s.value());
             case Log.Target.BranchRef b -> revisions.resolveBranch(b.branch());
-            case Log.Target.CommitRef c -> revisions.resolveCommitObject(c.commit());
+            case Log.Target.CommitRefTarget c -> revisions.resolveCommitObject(c.commit());
+            case Log.Target.RemoteBranchRef rb -> revisions.resolveRemoteBranch(rb.branch());
             case Log.Target.Symmetric ignored -> throw new IllegalStateException();
         };
     }

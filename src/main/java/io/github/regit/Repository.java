@@ -246,6 +246,12 @@ public final class Repository {
     /** Walk up to {@code limit} commits starting at a commit. */
     public List<Commit> log(Commit commit, int limit) throws IOException { return log(Log.from(commit).limit(limit)); }
 
+    /** Walk commit history starting at a remote-tracking branch. */
+    public List<Commit> log(RemoteBranch branch) throws IOException { return log(Log.from(branch)); }
+
+    /** Walk up to {@code limit} commits starting at a remote-tracking branch. */
+    public List<Commit> log(RemoteBranch branch, int limit) throws IOException { return log(Log.from(branch).limit(limit)); }
+
     /** Walk commit history for a revision or range (e.g. {@code "main"}, {@code "v1..HEAD"}, {@code "a...b"}). */
     public List<Commit> log(String revision) throws IOException { return log(Log.from(revision)); }
 
@@ -764,6 +770,142 @@ public final class Repository {
         }
         return tip;
     }
+    /** List configured named remotes. */
+    public List<Remote> remotes() throws IOException { return Remotes.list(layout); }
+
+    /** Look up a configured remote by name (e.g. {@code "origin"}). */
+    public Remote remote(String name) throws IOException { return Remotes.require(layout, name); }
+
+    /** Register a new named remote pointing to a URL or filesystem path. */
+    public Remote addRemote(String name, String url) throws IOException {
+        GitConfig.addRemote(layout, name, url);
+        return Remotes.require(layout, name);
+    }
+
+    /** Register a new named remote pointing to a local filesystem repository path. */
+    public Remote addRemote(String name, Path directory) throws IOException {
+        return addRemote(name, Objects.requireNonNull(directory).toAbsolutePath().normalize().toString());
+    }
+
+    /** Remove a named remote from repository config. */
+    public void removeRemote(Remote remote) throws IOException {
+        GitConfig.removeRemote(layout, Objects.requireNonNull(remote).nameIn(layout));
+    }
+
+    /** Remove a named remote by name from repository config. */
+    public void removeRemote(String name) throws IOException {
+        GitConfig.removeRemote(layout, Objects.requireNonNull(name));
+    }
+
+    /** List all remote-tracking branches ({@code git branch -r}). */
+    public List<RemoteBranch> remoteBranches() throws IOException {
+        return Remotes.remoteBranches(layout);
+    }
+
+    /** Look up an existing remote-tracking branch (e.g. {@code remoteBranch("origin", "main")}). */
+    public RemoteBranch remoteBranch(String remoteName, String branchName) throws IOException {
+        RemoteBranch rb = new RemoteBranch(layout, Objects.requireNonNull(remoteName), Objects.requireNonNull(branchName));
+        new Revisions(layout, db).resolveRemoteBranch(rb);
+        return rb;
+    }
+
+    /** Upstream tracking info and ahead/behind counts for the current branch ({@code git status -sb}). */
+    public Optional<BranchTracking> branchTracking() throws IOException {
+        var current = layout.currentBranchOptional();
+        return current.isEmpty() ? Optional.empty() : Remotes.tracking(layout, db, current.get());
+    }
+
+    /** Upstream tracking info and ahead/behind counts for a local branch ({@code git branch -vv}). */
+    public Optional<BranchTracking> branchTracking(Branch branch) throws IOException {
+        return Remotes.tracking(layout, db, Objects.requireNonNull(branch).nameIn(layout));
+    }
+
+    /** Fetch all branches from a configured remote into {@code refs/remotes/<remote>/*} ({@code git fetch <remote>}). */
+    public FetchResult fetch(Remote remote) throws IOException {
+        return fetch(remote, FetchOptions.defaults());
+    }
+
+    /** Fetch from a configured remote with options (e.g. {@code FetchOptions.defaults().prune()}). */
+    public FetchResult fetch(Remote remote, FetchOptions options) throws IOException {
+        String name = Objects.requireNonNull(remote).nameIn(layout);
+        return change(Lifecycle.Operation.FETCH, name, () -> Remotes.fetch(layout, db, remote, options));
+    }
+
+    /** Fetch all branches from a named remote (e.g. {@code "origin"}). */
+    public FetchResult fetch(String remoteName) throws IOException {
+        return fetch(remote(remoteName), FetchOptions.defaults());
+    }
+
+    /** Fetch from a named remote with options ({@code git fetch <remote> --prune}). */
+    public FetchResult fetch(String remoteName, FetchOptions options) throws IOException {
+        return fetch(remote(remoteName), options);
+    }
+
+    /** Push the current branch to a configured remote using the same branch name. */
+    public String push(Remote remote) throws IOException {
+        String current = branch();
+        return push(remote, currentBranch(), current, PushOptions.defaults());
+    }
+
+    /** Push the current branch to a configured remote with options ({@code -f}, {@code --force-with-lease}, {@code -u}, {@code --delete}). */
+    public String push(Remote remote, PushOptions options) throws IOException {
+        String current = branch();
+        return push(remote, currentBranch(), current, options);
+    }
+
+    /** Push {@code source} branch to {@code destination} on {@code remote} with options. */
+    public String push(Remote remote, Branch source, String destination, PushOptions options) throws IOException {
+        String localName = options.isDelete() ? "" : Objects.requireNonNull(source).nameIn(layout);
+        Objects.requireNonNull(remote).nameIn(layout);
+        return change(Lifecycle.Operation.PUSH, destination,
+                () -> Remotes.push(layout, db, remote, localName, destination, options));
+    }
+
+    /** Delete {@code remoteBranchName} on {@code remote} ({@code git push <remote> --delete <branch>}). */
+    public void deleteRemoteBranch(Remote remote, String remoteBranchName) throws IOException {
+        Objects.requireNonNull(remote).nameIn(layout);
+        change(Lifecycle.Operation.PUSH, ":" + remoteBranchName, () -> {
+            Remotes.push(layout, db, remote, "", remoteBranchName, PushOptions.defaults().delete());
+            return null;
+        });
+    }
+
+    /** Delete a {@link RemoteBranch} on its remote ({@code git push <remote> --delete <branch>}). */
+    public void deleteRemoteBranch(RemoteBranch remoteBranch) throws IOException {
+        Objects.requireNonNull(remoteBranch).refNameIn(layout);
+        deleteRemoteBranch(remote(remoteBranch.remote()), remoteBranch.branch());
+    }
+
+    /** Push the current branch to a smart HTTP remote with options. */
+    public String push(SmartHttpRemote remote, String destination, PushOptions options) throws IOException {
+        Objects.requireNonNull(options, "options");
+        return change(Lifecycle.Operation.PUSH, destination, () -> {
+            String expectedLease = options.expectedLease() != null
+                    ? new Revisions(layout, db).resolveCommit(options.expectedLease()) : null;
+            if (options.isDelete()) {
+                remote.deleteBranch(destination, options.isForceWithLease(), expectedLease);
+                return null;
+            }
+            return remote.push(destination, layout.require(branch()), db,
+                    options.isForce(), options.isForceWithLease(), expectedLease);
+        });
+    }
+
+    /** Push the current branch to a filesystem remote with options ({@code -f}, {@code --force-with-lease}, {@code --delete}). */
+    public String push(Path remote, String destination, PushOptions options) throws IOException {
+        Objects.requireNonNull(options, "options");
+        return change(Lifecycle.Operation.PUSH, destination, () -> {
+            String expectedLease = options.expectedLease() != null
+                    ? new Revisions(layout, db).resolveCommit(options.expectedLease()) : null;
+            if (options.isDelete()) {
+                Remotes.deleteRemoteBranchLocal(remote, destination, options.isForceWithLease(), expectedLease);
+                return null;
+            }
+            return Remotes.pushLocal(remote, db, destination, layout.require(branch()),
+                    options.isForce(), options.isForceWithLease(), expectedLease);
+        });
+    }
+
     public String push(SmartHttpRemote remote, String destination) throws IOException {
         return change(Lifecycle.Operation.PUSH, destination, () -> remote.push(destination, layout.require(branch()), db));
     }
