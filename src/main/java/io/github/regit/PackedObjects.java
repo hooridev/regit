@@ -48,6 +48,38 @@ final class PackedObjects {
         }
         return null;
     }
+    void findByPrefix(String prefix, Set<String> matches) throws IOException {
+        if (!Files.isDirectory(directory)) return;
+        byte[] lower = HEX.parseHex(prefix + "0".repeat(40 - prefix.length()));
+        int bucket = lower[0] & 255;
+        try (var indexes = Files.newDirectoryStream(directory, "*.idx")) {
+            for (Path index : indexes) {
+                try (var in = new RandomAccessFile(index.toFile(), "r")) {
+                    if (in.readInt() != 0xff744f63 || in.readInt() != 2) throw new IOException("Unsupported pack index");
+                    in.seek(8L + 4L * Math.max(0, bucket - 1));
+                    int low = bucket == 0 ? 0 : in.readInt();
+                    int limit = in.readInt();
+                    int lo = low, hi = limit;
+                    byte[] probe = new byte[20];
+                    while (lo < hi) {
+                        int mid = (lo + hi) >>> 1;
+                        in.seek(1032L + 20L * mid);
+                        in.readFully(probe);
+                        if (Arrays.compareUnsigned(probe, lower) < 0) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    for (int i = lo; i < limit; i++) {
+                        in.seek(1032L + 20L * i);
+                        in.readFully(probe);
+                        String hex = HEX.formatHex(probe);
+                        if (!hex.startsWith(prefix)) break;
+                        matches.add(hex);
+                    }
+                }
+            }
+        }
+    }
+
     ObjectsDb.Value read(Location location, ObjectsDb db) throws IOException {
         try (var in = new RandomAccessFile(location.pack.toFile(), "r")) {
             var deltas = new ArrayDeque<Pack.Record>();

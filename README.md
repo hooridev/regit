@@ -35,7 +35,9 @@ main.removeWorktree(agent);
 main.deleteBranch(branch);
 ```
 
-`Repository.open(path)` reopens a worktree or bare repository. `branches()`, `branch()`, `head()` and `worktrees()` expose its current state. An unborn branch has an empty head. A linked checkout has its own HEAD, index and operation lock. Different agents can commit concurrently on separate branches. Branch deletion checks reachability from the current HEAD and checkout ownership.
+`Repository.open(path)` reopens a worktree or bare repository. `branches()`, `branch()`, `head()`, `headCommit()` and `worktrees()` expose its current state. An unborn branch has an empty head. A linked checkout has its own HEAD, index and operation lock. Different agents can commit concurrently on separate branches. Branch deletion checks reachability from the current HEAD and checkout ownership.
+
+Use `repo.commit(revision)` (or `repo.commit(branch)`) to inspect an individual `Commit` (`id`, `tree`, `parents`, `author`, `committer`, `message`, `subject()`, `body()`), resolving branches, tags (including annotated tags), abbreviated SHA-1 prefixes and `~`/`^` ancestry expressions. Use `repo.log()`, `repo.log(limit)`, `repo.log(branch, limit)`, `repo.log(commit, limit)`, `repo.log("v1..main")` or a fluent `Log` query (`from`/`include`/`exclude`/`range`/`symmetricRange` accepting `Branch`, `Commit` or revision strings, `author`/`committer` accepting `Identity`, regex or `Pattern`, `paths` accepting `Path` or strings, plus `order`, `limit`, `skip`, `reverse`, `firstParent`, `mergesOnly`/`noMerges`, `grep`, `since`/`until`, `all`/`branches`/`tags`) to traverse history in Git-compatible order across loose and packed objects, including bare repositories and detached HEADs.
 
 A `Branch` identifies a local ref by repository and name. Obtain one from `createBranch(name)`, `currentBranch()`, `branch(name)` or `localBranches()`. All worktrees of the repository can use it. `merge(branch, ...)` follows that named ref, while `merge(agent, ...)` follows the branch currently checked out by the agent. Deleting and recreating a branch under the same name makes an existing handle refer to the recreated ref.
 

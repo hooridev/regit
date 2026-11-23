@@ -55,6 +55,53 @@ public final class Repository {
 
     public Optional<String> head() throws IOException { return Optional.ofNullable(layout.tip(branch())); }
 
+    /** Resolve {@code HEAD} (attached or detached) to its commit, or empty on an unborn branch. */
+    public Optional<Commit> headCommit() throws IOException {
+        String id = new Revisions(layout, db).resolveHeadOptional();
+        return id == null ? Optional.empty() : Optional.of(revision(id).toCommit(id));
+    }
+
+    /** Resolve any Git revision expression (branch, tag, SHA, short SHA, {@code HEAD~2}, etc.) to a commit. */
+    public Commit commit(String revision) throws IOException {
+        String id = new Revisions(layout, db).resolveCommit(Objects.requireNonNull(revision));
+        return revision(id).toCommit(id);
+    }
+
+    /** Read the current tip commit of a local branch. */
+    public Commit commit(Branch branch) throws IOException {
+        String id = new Revisions(layout, db).resolveBranch(Objects.requireNonNull(branch));
+        return revision(id).toCommit(id);
+    }
+
+    /** Walk commit history from {@code HEAD} in Git's default reverse-chronological order. */
+    public List<Commit> log() throws IOException { return log(Log.of()); }
+
+    /** Walk up to {@code limit} commits from {@code HEAD}. */
+    public List<Commit> log(int limit) throws IOException { return log(Log.of().limit(limit)); }
+
+    /** Walk commit history starting at a local branch. */
+    public List<Commit> log(Branch branch) throws IOException { return log(Log.from(branch)); }
+
+    /** Walk up to {@code limit} commits starting at a local branch. */
+    public List<Commit> log(Branch branch, int limit) throws IOException { return log(Log.from(branch).limit(limit)); }
+
+    /** Walk commit history starting at a commit. */
+    public List<Commit> log(Commit commit) throws IOException { return log(Log.from(commit)); }
+
+    /** Walk up to {@code limit} commits starting at a commit. */
+    public List<Commit> log(Commit commit, int limit) throws IOException { return log(Log.from(commit).limit(limit)); }
+
+    /** Walk commit history for a revision or range (e.g. {@code "main"}, {@code "v1..HEAD"}, {@code "a...b"}). */
+    public List<Commit> log(String revision) throws IOException { return log(Log.from(revision)); }
+
+    /** Walk up to {@code limit} commits for a revision or range. */
+    public List<Commit> log(String revision, int limit) throws IOException { return log(Log.from(revision).limit(limit)); }
+
+    /** Execute a structured {@link Log} query against this repository. */
+    public List<Commit> log(Log query) throws IOException {
+        return new History(db).walk(Objects.requireNonNull(query), layout);
+    }
+
     @FunctionalInterface private interface Action<T> { T run() throws IOException; }
     private <T> T change(Lifecycle.Operation operation, String target, Action<T> action) throws IOException {
         Path location = layout.root() == null ? layout.common() : layout.root();

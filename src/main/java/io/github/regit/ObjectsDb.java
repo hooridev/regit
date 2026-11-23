@@ -141,4 +141,28 @@ final class ObjectsDb {
         } finally { Files.deleteIfExists(tmp); }
     }
     boolean contains(String hash) throws IOException { return Files.isRegularFile(file(hash)) || packed.locate(hash) != null || (fallback != null && fallback.contains(hash)); }
+
+    java.util.Set<String> findByPrefix(String prefix) throws IOException {
+        if (prefix.length() < 4 || prefix.length() > 40) throw new IOException("Invalid object ID prefix: " + prefix);
+        for (int i = 0; i < prefix.length(); i++) {
+            char c = prefix.charAt(i);
+            if (!(c >= '0' && c <= '9' || c >= 'a' && c <= 'f'))
+                throw new IOException("Invalid object ID prefix: " + prefix);
+        }
+        var matches = new java.util.LinkedHashSet<String>();
+        String dirName = prefix.substring(0, 2), rest = prefix.substring(2);
+        Path fanout = objects.resolve(dirName);
+        if (Files.isDirectory(fanout)) {
+            try (var items = Files.list(fanout)) {
+                for (Path p : items.toList()) {
+                    String name = p.getFileName().toString();
+                    if (name.length() == 38 && name.startsWith(rest) && Files.isRegularFile(p))
+                        matches.add(dirName + name);
+                }
+            }
+        }
+        packed.findByPrefix(prefix, matches);
+        if (fallback != null) matches.addAll(fallback.findByPrefix(prefix));
+        return matches;
+    }
 }
