@@ -51,7 +51,14 @@ final class History {
         common.retainAll(ancestors(b));
         var best = new HashSet<>(common);
         for (String hash : common) best.removeAll(read(hash).parents());
-        return new ArrayList<>(best);
+        var sorted = new ArrayList<>(best);
+        sorted.sort((x, y) -> {
+            try {
+                int cmp = Long.compare(read(y).committerEpoch(), read(x).committerEpoch());
+                return cmp != 0 ? cmp : x.compareTo(y);
+            } catch (IOException e) { throw new java.io.UncheckedIOException(e); }
+        });
+        return sorted;
     }
 
     String base(String a, String b) throws IOException {
@@ -392,32 +399,12 @@ final class History {
         var normalized = new ArrayList<String>(raw.size());
         for (Log.PathSpec spec : raw) {
             String p = switch (spec) {
-                case Log.PathSpec.Relative rel -> rel.path();
-                case Log.PathSpec.FilePath filePath -> toRepoPath(filePath.path(), layout);
+                case Log.PathSpec.Relative rel -> Layout.normalizeRelativePath(rel.path(), true);
+                case Log.PathSpec.FilePath filePath -> layout.repoPath(filePath.path());
             };
-            while (p.startsWith("./")) p = p.substring(2);
-            while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
-            if (p.equals(".") || p.isEmpty()) {
-                normalized.add("");
-            } else {
-                GitFiles.path(p);
-                normalized.add(p);
-            }
+            normalized.add(p);
         }
         return normalized;
-    }
-
-    private static String toRepoPath(Path path, Layout layout) throws IOException {
-        if (!path.isAbsolute()) {
-            return path.normalize().toString().replace(path.getFileSystem().getSeparator(), "/");
-        }
-        if (layout.root() == null) throw new IOException("Absolute path requires a worktree: " + path);
-        Path root = layout.root();
-        Path candidate = path.normalize();
-        if (!candidate.startsWith(root) && Files.exists(candidate)) candidate = candidate.toRealPath();
-        if (!candidate.startsWith(root)) throw new IOException("Path outside repository: " + path);
-        Path relative = root.relativize(candidate);
-        return relative.toString().replace(relative.getFileSystem().getSeparator(), "/");
     }
 
     private static boolean matches(Commit commit, Log query) {

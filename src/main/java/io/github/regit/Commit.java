@@ -10,7 +10,7 @@ public record Commit(
         List<String> parents,
         Identity author,
         Identity committer,
-        String message) {
+        String message) implements CommitRef {
 
     public Commit {
         Objects.requireNonNull(id, "id");

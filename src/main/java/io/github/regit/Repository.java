@@ -33,6 +33,161 @@ public final class Repository {
     }
     public boolean isBare() { return layout.root() == null; }
 
+    /** Worktree top-level directory ({@code git rev-parse --show-toplevel}), empty for a bare repository. */
+    public Optional<Path> worktreeRoot() { return Optional.ofNullable(layout.root()); }
+
+    /** Administrative Git directory for this worktree or bare repository ({@code git rev-parse --git-dir}). */
+    public Path gitDir() { return layout.admin(); }
+
+    /** Shared common Git directory across all linked worktrees ({@code git rev-parse --git-common-dir}). */
+    public Path commonDir() { return layout.common(); }
+
+    /** True when {@code HEAD} points directly to a commit instead of a symbolic branch ref. */
+    public boolean isDetachedHead() throws IOException { return layout.isDetachedHead(); }
+
+    /** Abbreviated symbolic name for {@code HEAD} ({@code git rev-parse --abbrev-ref HEAD}). */
+    public String abbrevRef() throws IOException { return abbrevRef("HEAD"); }
+
+    /** Abbreviated symbolic name for a revision ({@code git rev-parse --abbrev-ref <rev>}). */
+    public String abbrevRef(String revision) throws IOException {
+        return new Revisions(layout, db).abbrevRef(revision);
+    }
+
+    /** Resolve any revision, tag, tree, blob, {@code rev:path} or {@code :path} to its 40-char object ID. */
+    public String resolve(String revision) throws IOException {
+        return new Revisions(layout, db).resolveObject(Objects.requireNonNull(revision));
+    }
+
+    /** Resolve a {@link CommitRef} ({@link Commit}, {@link Branch}, etc.) to its 40-char commit ID. */
+    public String resolve(CommitRef target) throws IOException {
+        return new Revisions(layout, db).resolveCommit(target);
+    }
+
+    /** Unique abbreviated object ID ({@code git rev-parse --short}, default minimum length 7). */
+    public String shortId(String revision) throws IOException { return shortId(revision, 7); }
+
+    /** Unique abbreviated object ID with at least {@code minLength} hex characters ({@code --short=<n>}). */
+    public String shortId(String revision, int minLength) throws IOException {
+        var revisions = new Revisions(layout, db);
+        return revisions.abbreviate(revisions.resolveObject(Objects.requireNonNull(revision)), minLength);
+    }
+
+    /** Unique abbreviated commit ID for a {@link CommitRef}. */
+    public String shortId(CommitRef target) throws IOException { return shortId(target, 7); }
+
+    /** Unique abbreviated commit ID for a {@link CommitRef} with at least {@code minLength} hex characters. */
+    public String shortId(CommitRef target, int minLength) throws IOException {
+        var revisions = new Revisions(layout, db);
+        return revisions.abbreviate(revisions.resolveCommit(target), minLength);
+    }
+
+    /** True if {@code ancestor} is an ancestor of {@code descendant} ({@code git merge-base --is-ancestor}). */
+    public boolean isAncestor(CommitRef ancestor, CommitRef descendant) throws IOException {
+        var revisions = new Revisions(layout, db);
+        return new History(db).contains(revisions.resolveCommit(descendant), revisions.resolveCommit(ancestor));
+    }
+
+    /** True if {@code ancestor} is an ancestor of {@code descendant} ({@code git merge-base --is-ancestor}). */
+    public boolean isAncestor(String ancestor, String descendant) throws IOException {
+        return isAncestor(CommitRef.of(ancestor), CommitRef.of(descendant));
+    }
+
+    /** Best common ancestor of two commits ({@code git merge-base}), empty for unrelated histories. */
+    public Optional<Commit> mergeBase(CommitRef first, CommitRef second) throws IOException {
+        List<Commit> bases = mergeBases(first, second);
+        return bases.isEmpty() ? Optional.empty() : Optional.of(bases.getFirst());
+    }
+
+    /** Best common ancestor of two revisions ({@code git merge-base}), empty for unrelated histories. */
+    public Optional<Commit> mergeBase(String first, String second) throws IOException {
+        return mergeBase(CommitRef.of(first), CommitRef.of(second));
+    }
+
+    /** All maximal common ancestors of two commits ({@code git merge-base --all}). */
+    public List<Commit> mergeBases(CommitRef first, CommitRef second) throws IOException {
+        var revisions = new Revisions(layout, db);
+        var history = new History(db);
+        var ids = history.mergeBases(revisions.resolveCommit(first), revisions.resolveCommit(second));
+        var commits = new ArrayList<Commit>(ids.size());
+        for (String id : ids) commits.add(history.read(id).toCommit(id));
+        return Collections.unmodifiableList(commits);
+    }
+
+    /** All maximal common ancestors of two revisions ({@code git merge-base --all}). */
+    public List<Commit> mergeBases(String first, String second) throws IOException {
+        return mergeBases(CommitRef.of(first), CommitRef.of(second));
+    }
+
+    /** Read raw blob bytes at {@code path} in {@code revision} ({@code git show <rev>:<path>}). */
+    public byte[] showBlob(CommitRef revision, String path) throws IOException {
+        String normalized = Layout.normalizeRelativePath(path, false);
+        var revisions = new Revisions(layout, db);
+        String tree = revisions.peelToTree(revisions.resolveCommit(revision));
+        Entry entry = revisions.findTreeEntry(tree, normalized);
+        if (entry == null) throw new IOException("Path not found: " + normalized);
+        return db.read(entry.hash(), "blob");
+    }
+
+    /** Read raw blob bytes at {@code path} in {@code revision}. */
+    public byte[] showBlob(CommitRef revision, Path path) throws IOException {
+        return showBlob(revision, layout.repoPath(path));
+    }
+
+    /** Read raw blob bytes at {@code path} in {@code revision}. */
+    public byte[] showBlob(String revision, String path) throws IOException {
+        return showBlob(CommitRef.of(revision), path);
+    }
+
+    /** Read raw blob bytes addressed by {@code <rev>:<path>} or {@code :<path>} ({@code git show <spec>}). */
+    public byte[] showBlob(String revAndPath) throws IOException {
+        String id = new Revisions(layout, db).resolveObject(Objects.requireNonNull(revAndPath));
+        return db.read(id, "blob");
+    }
+
+    /** Read UTF-8 text of a file at {@code path} in {@code revision}. */
+    public String showText(CommitRef revision, String path) throws IOException {
+        return new String(showBlob(revision, path), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** Read UTF-8 text of a file at {@code path} in {@code revision}. */
+    public String showText(CommitRef revision, Path path) throws IOException {
+        return new String(showBlob(revision, path), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** Read UTF-8 text addressed by {@code <rev>:<path>} or {@code :<path>}. */
+    public String showText(String revAndPath) throws IOException {
+        return new String(showBlob(revAndPath), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** List entries of the root tree of {@code revision} ({@code git ls-tree <rev>}). */
+    public List<TreeEntry> listTree(CommitRef revision) throws IOException {
+        return listTree(revision, "");
+    }
+
+    /** List entries of {@code directoryPath} in {@code revision}. */
+    public List<TreeEntry> listTree(CommitRef revision, String directoryPath) throws IOException {
+        String normalized = Layout.normalizeRelativePath(directoryPath, true);
+        var revisions = new Revisions(layout, db);
+        String rootTree = revisions.peelToTree(revisions.resolveCommit(revision));
+        Entry dir = revisions.findTreeEntry(rootTree, normalized);
+        if (dir == null || dir.mode() != Entry.TREE) throw new IOException("Tree not found: " + directoryPath);
+        return revisions.listTree(dir.hash(), normalized);
+    }
+
+    /** List entries of {@code directoryPath} in {@code revision}. */
+    public List<TreeEntry> listTree(CommitRef revision, Path directoryPath) throws IOException {
+        return listTree(revision, layout.repoPath(directoryPath));
+    }
+
+    /** List entries addressed by a tree-ish revision or {@code <rev>:<dir>} spec. */
+    public List<TreeEntry> listTree(String revOrSpec) throws IOException {
+        var revisions = new Revisions(layout, db);
+        String treeId = revisions.peelToTree(revisions.resolveObject(Objects.requireNonNull(revOrSpec)));
+        int colon = revOrSpec.indexOf(':');
+        String prefix = colon >= 0 ? Layout.normalizeRelativePath(revOrSpec.substring(colon + 1), true) : "";
+        return revisions.listTree(treeId, prefix);
+    }
+
     /** Mount this bare repository at one JDK HTTP server context. The application owns authentication. */
     public GitHttpHandler httpHandler(GitHttpHandler.Access access) throws IOException {
         if (!isBare() || !layout.isBareCommon()) throw new IOException("Hosting requires a bare repository");
@@ -67,9 +222,9 @@ public final class Repository {
         return revision(id).toCommit(id);
     }
 
-    /** Read the current tip commit of a local branch. */
-    public Commit commit(Branch branch) throws IOException {
-        String id = new Revisions(layout, db).resolveBranch(Objects.requireNonNull(branch));
+    /** Resolve any {@link CommitRef} ({@link Branch}, {@link Commit}, etc.) to its commit. */
+    public Commit commit(CommitRef target) throws IOException {
+        String id = new Revisions(layout, db).resolveCommit(target);
         return revision(id).toCommit(id);
     }
 

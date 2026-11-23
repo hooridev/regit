@@ -49,6 +49,41 @@ record Layout(Path root, Path admin, Path common) {
         if (!head.startsWith("ref: refs/heads/")) throw new IOException("Expected an attached branch");
         return branch(head.substring(16));
     }
+    Optional<String> currentBranchOptional() throws IOException {
+        String head = line(head());
+        if (!head.startsWith("ref: refs/heads/")) return Optional.empty();
+        return Optional.of(branch(head.substring(16)));
+    }
+    boolean isDetachedHead() throws IOException {
+        return !line(head()).startsWith("ref: ");
+    }
+    String repoPath(Path path) throws IOException {
+        Objects.requireNonNull(path, "path");
+        String raw;
+        if (!path.isAbsolute()) {
+            raw = path.normalize().toString().replace(path.getFileSystem().getSeparator(), "/");
+        } else {
+            if (root == null) throw new IOException("Absolute path requires a worktree: " + path);
+            Path candidate = path.normalize();
+            if (!candidate.startsWith(root) && Files.exists(candidate)) candidate = candidate.toRealPath();
+            if (!candidate.startsWith(root)) throw new IOException("Path outside repository: " + path);
+            Path relative = root.relativize(candidate);
+            raw = relative.toString().replace(relative.getFileSystem().getSeparator(), "/");
+        }
+        return normalizeRelativePath(raw, true);
+    }
+    static String normalizeRelativePath(String path, boolean allowRoot) throws IOException {
+        Objects.requireNonNull(path, "path");
+        String p = path;
+        while (p.startsWith("./")) p = p.substring(2);
+        while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
+        if (p.equals(".") || p.isEmpty()) {
+            if (allowRoot) return "";
+            throw new IOException("Empty repository path");
+        }
+        GitFiles.path(p);
+        return p;
+    }
     Path ref(String branch) throws IOException { return common.resolve("refs/heads/" + GitFiles.branch(branch)); }
     String tip(String name) throws IOException {
         var file = ref(name);

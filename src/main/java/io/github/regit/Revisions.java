@@ -5,7 +5,7 @@ import java.nio.file.*;
 import java.util.*;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 
-/** Resolve Git revision expressions, refs, packed-refs, annotated tags and abbreviated object IDs. */
+/** Resolve Git revision expressions, refs, packed-refs, annotated tags, tree paths and abbreviated object IDs. */
 final class Revisions {
     private static final Set<String> ADMIN_REFS = Set.of("HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD");
     private final Layout layout;
@@ -35,14 +35,150 @@ final class Revisions {
         return id;
     }
 
+    String resolveCommit(CommitRef ref) throws IOException {
+        return switch (Objects.requireNonNull(ref, "ref")) {
+            case Commit c -> resolveCommitObject(c);
+            case Branch b -> resolveBranch(b);
+            case CommitRef.Spec s -> resolveCommit(s.expression());
+        };
+    }
+
     String resolveCommit(String expression) throws IOException {
+        return peelToCommit(resolveObject(expression));
+    }
+
+    /** Resolve any Git revision or {@code rev:path} / {@code :path} expression to its 40-char object ID. */
+    String resolveObject(String expression) throws IOException {
         if (expression == null || expression.isEmpty()) throw new IOException("Empty revision");
+        int colon = findPathColon(expression);
+        if (colon >= 0) {
+            return resolveColonExpression(expression.substring(0, colon), expression.substring(colon + 1), expression);
+        }
         int split = firstOperator(expression);
         String base = split < 0 ? expression : expression.substring(0, split);
         if (base.isEmpty()) throw new IOException("Invalid revision: " + expression);
-        String current = peelToCommit(resolveBase(base));
+        String current = resolveBase(base);
         if (split < 0) return current;
         return applySuffixes(current, expression, split);
+    }
+
+    private String resolveColonExpression(String left, String rawPath, String original) throws IOException {
+        if (left.isEmpty()) {
+            // Index stage lookup: ":path" or ":0:path"
+            String pathPart = rawPath;
+            if (pathPart.startsWith("0:")) pathPart = pathPart.substring(2);
+            String normalized = Layout.normalizeRelativePath(pathPart, false);
+            Entry entry = Index.read(layout.index()).get(normalized);
+            if (entry == null) throw new IOException("Path not in index: " + original);
+            return entry.hash();
+        }
+        String revId = resolveObject(left);
+        String rootTree = peelToTree(revId);
+        String normalized = Layout.normalizeRelativePath(rawPath, true);
+        if (normalized.isEmpty()) return rootTree;
+        Entry entry = findTreeEntry(rootTree, normalized);
+        if (entry == null) throw new IOException("Path not found in " + left + ": " + normalized);
+        return entry.hash();
+    }
+
+    Entry findTreeEntry(String rootTree, String normalizedPath) throws IOException {
+        if (normalizedPath.isEmpty()) return new Entry(Entry.TREE, rootTree);
+        String current = rootTree;
+        int start = 0;
+        while (true) {
+            int slash = normalizedPath.indexOf('/', start);
+            String segment = slash < 0 ? normalizedPath.substring(start) : normalizedPath.substring(start, slash);
+            Entry entry = Trees.entries(db.read(current, "tree")).get(segment);
+            if (entry == null) return null;
+            if (slash < 0) return entry;
+            if (entry.mode() != Entry.TREE) return null;
+            current = entry.hash();
+            start = slash + 1;
+        }
+    }
+
+    List<TreeEntry> listTree(String treeId, String dirPrefix) throws IOException {
+        var entries = Trees.entries(db.read(treeId, "tree"));
+        var names = new ArrayList<>(entries.keySet());
+        names.sort((a, b) -> {
+            String keyA = entries.get(a).mode() == Entry.TREE ? a + "/" : a;
+            String keyB = entries.get(b).mode() == Entry.TREE ? b + "/" : b;
+            return Entry.BYTE_ORDER.compare(keyA, keyB);
+        });
+        var result = new ArrayList<TreeEntry>(names.size());
+        String prefix = dirPrefix.isEmpty() ? "" : dirPrefix + "/";
+        for (String name : names) {
+            result.add(TreeEntry.from(name, prefix + name, entries.get(name)));
+        }
+        return Collections.unmodifiableList(result);
+    }
+
+    String peelToTree(String oid) throws IOException {
+        String current = oid;
+        for (int depth = 0; depth < 16; depth++) {
+            var value = db.get(current);
+            switch (value.type()) {
+                case "tree" -> { return current; }
+                case "commit" -> { return Revision.parse(value.data()).tree(); }
+                case "tag" -> current = tagTarget(value.data());
+                default -> throw new IOException("Expected tree-ish object at " + oid);
+            }
+        }
+        throw new IOException("Tag indirection loop at " + oid);
+    }
+
+    /** Compute shortest unique object ID prefix with at least {@code max(4, minLength)} hex chars. */
+    String abbreviate(String oid, int minLength) throws IOException {
+        String full = GitFiles.id(oid);
+        int start = Math.max(4, Math.min(40, minLength));
+        for (int len = start; len < 40; len++) {
+            if (db.findByPrefix(full.substring(0, len)).size() <= 1) {
+                return full.substring(0, len);
+            }
+        }
+        return full;
+    }
+
+    /** Match {@code git rev-parse --abbrev-ref <rev>}. */
+    String abbrevRef(String rev) throws IOException {
+        Objects.requireNonNull(rev, "rev");
+        if (rev.isEmpty()) throw new IOException("Empty revision");
+        if ("HEAD".equals(rev)) {
+            if (resolveHeadOptional() == null) throw new IOException("Unknown revision: HEAD");
+            String raw = GitFiles.line(layout.head());
+            if (raw.startsWith("ref: ")) return shortenRefName(raw.substring(5).strip());
+            return "HEAD";
+        }
+        String matched = matchRefName(rev);
+        if (matched != null) return shortenRefName(matched);
+        // Verify revision exists even if not a ref (Git returns empty/original; for non-ref SHA Git echoes SHA)
+        if (firstOperator(rev) < 0 && findPathColon(rev) < 0) {
+            throw new IOException("Unknown revision: " + rev);
+        }
+        resolveObject(rev);
+        return rev;
+    }
+
+    private String matchRefName(String name) throws IOException {
+        String[] candidates = {
+                name,
+                "refs/" + name,
+                "refs/tags/" + name,
+                "refs/heads/" + name,
+                "refs/remotes/" + name,
+                "refs/remotes/" + name + "/HEAD"
+        };
+        for (String candidate : candidates) {
+            if (readRef(candidate, 0) != null) return candidate;
+        }
+        return null;
+    }
+
+    static String shortenRefName(String refName) {
+        if (refName.startsWith("refs/heads/")) return refName.substring(11);
+        if (refName.startsWith("refs/tags/")) return refName.substring(10);
+        if (refName.startsWith("refs/remotes/")) return refName.substring(13);
+        return refName;
     }
 
     void expandSpec(String spec, List<String> includes, List<String> excludes, History history) throws IOException {
@@ -114,6 +250,7 @@ final class Revisions {
         while (i < expr.length()) {
             char op = expr.charAt(i++);
             if (op == '~') {
+                current = peelToCommit(current);
                 int start = i;
                 while (i < expr.length() && Character.isDigit(expr.charAt(i))) i++;
                 int count = start == i ? 1 : parseNonNegative(expr.substring(start, i), expr);
@@ -127,10 +264,21 @@ final class Revisions {
                     int close = expr.indexOf('}', i + 1);
                     if (close < 0) throw new IOException("Unclosed peel operator in revision: " + expr);
                     String target = expr.substring(i + 1, close);
-                    if (!target.isEmpty() && !target.equals("commit"))
-                        throw new IOException("Unsupported peel target in revision: " + expr);
+                    current = switch (target) {
+                        case "" -> peelTag(current);
+                        case "commit" -> peelToCommit(current);
+                        case "tree" -> peelToTree(current);
+                        case "blob" -> {
+                            String peeled = peelTag(current);
+                            if (!"blob".equals(db.get(peeled).type()))
+                                throw new IOException("Expected blob object in revision: " + expr);
+                            yield peeled;
+                        }
+                        default -> throw new IOException("Unsupported peel target in revision: " + expr);
+                    };
                     i = close + 1;
                 } else {
+                    current = peelToCommit(current);
                     int start = i;
                     while (i < expr.length() && Character.isDigit(expr.charAt(i))) i++;
                     int parentIndex = start == i ? 1 : parseNonNegative(expr.substring(start, i), expr);
@@ -148,9 +296,30 @@ final class Revisions {
         return current;
     }
 
+    private String peelTag(String oid) throws IOException {
+        String current = oid;
+        for (int depth = 0; depth < 16; depth++) {
+            var value = db.get(current);
+            if (!"tag".equals(value.type())) return current;
+            current = tagTarget(value.data());
+        }
+        throw new IOException("Tag indirection loop at " + oid);
+    }
+
     private static int parseNonNegative(String digits, String expr) throws IOException {
         try { return Integer.parseInt(digits); }
         catch (NumberFormatException e) { throw new IOException("Invalid revision number in: " + expr, e); }
+    }
+
+    private static int findPathColon(String expr) {
+        int braceDepth = 0;
+        for (int i = 0; i < expr.length(); i++) {
+            char c = expr.charAt(i);
+            if (c == '{') braceDepth++;
+            else if (c == '}' && braceDepth > 0) braceDepth--;
+            else if (c == ':' && braceDepth == 0) return i;
+        }
+        return -1;
     }
 
     private static int firstOperator(String expr) {

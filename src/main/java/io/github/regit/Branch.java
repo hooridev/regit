@@ -7,7 +7,7 @@ import java.util.Objects;
 /** A local branch identified by its owning repository and short ref name.
  * Operations resolve its current tip even after another worktree advances the branch.
  */
-public final class Branch {
+public final class Branch implements CommitRef {
     private final Path common;
     private final String name;
 
