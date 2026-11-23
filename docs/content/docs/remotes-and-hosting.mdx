@@ -1,33 +1,33 @@
 ---
-title: Remotes, Fetch, Push & HTTP-Hosting
-description: Benannte Remotes, fetch --prune, push -u / -f / --force-with-lease / --delete, Smart HTTP und Bare-Repo-Hosting.
+title: Remotes, Fetch, Push & HTTP Hosting
+description: Named remotes, fetch --prune, push -u / -f / --force-with-lease / --delete, Smart HTTP, and bare repo hosting.
 ---
 
-## Remotes konfigurieren
+## Configuring Remotes
 
-`Remote`-Handles lesen und schreiben die regulären `[remote "<name>"]`-Sektionen in `.git/config` und funktionieren sowohl mit lokalen Dateisystem-Pfaden als auch mit HTTP(S)-URLs.
+`Remote` handles read and write standard `[remote "<name>"]` sections in `.git/config`, supporting both local filesystem paths and HTTP(S) URLs.
 
 ```java title="ConfigureRemotes.java"
-// Lokales Bare-Repo oder Smart-HTTP-Endpoint als Remote registrieren
+// Register a Smart HTTP endpoint or a local bare repository
 Remote origin = repo.addRemote("origin", "https://git.example.org/team/app.git");
 Remote backup = repo.addRemote("backup", Path.of("/srv/git/app.git"));
 
-// Alle Remotes auflisten oder per Name laden
+// List configured remotes or look up by name
 List<Remote> remotes = repo.remotes();
 Remote loaded = repo.remote("origin");
 
-// Remote entfernen
+// Remove a remote from .git/config
 repo.removeRemote(backup);
 ```
 
 ## Fetch & Prune (`git fetch --prune`)
 
-`fetch(...)` aktualisiert alle Remote-Tracking-Branches unter `refs/remotes/<remote>/*` ohne den aktuellen Branch zu verändern:
+`fetch(...)` updates all remote-tracking refs under `refs/remotes/<remote>/*` without modifying your checked-out branch or working tree:
 
 ```java title="FetchAndPrune.java"
 Remote origin = repo.remote("origin");
 
-// Alle Remote-Branches holen und veraltete Tracking-Refs entfernen (`git fetch origin --prune`)
+// Fetch all remote branches and prune deleted ones (`git fetch origin --prune`)
 FetchResult fetched = repo.fetch(origin, FetchOptions.defaults().prune());
 
 fetched.updated().forEach((rb, oid) ->
@@ -35,42 +35,42 @@ fetched.updated().forEach((rb, oid) ->
 fetched.pruned().forEach(rb ->
     System.out.println("pruned  " + rb.fullName()));
 
-// Gefetchte RemoteBranch direkt weiterverwenden
+// Use the fetched RemoteBranch directly as a CommitRef
 RemoteBranch originMain = repo.remoteBranch("origin", "main");
 Diff behind = repo.diff(repo.currentBranch(), originMain);
 ```
 
-## Push-Modi (`-u`, `-f`, `--force-with-lease`, `--delete`)
+## Push Modes (`-u`, `-f`, `--force-with-lease`, `--delete`)
 
 ```java title="PushModes.java"
 Remote origin = repo.remote("origin");
 Branch current = repo.currentBranch();
 
-// 1. Standard Fast-Forward Push
+// 1. Standard fast-forward push
 repo.push(origin);
 
-// 2. Push mit Upstream-Tracking (`git push -u origin <branch>`)
+// 2. Push and configure upstream tracking (`git push -u origin <branch>`)
 repo.push(origin, PushOptions.defaults().setUpstream());
 
-// 3. Sicherer Force-Push gegen lokalen Tracking-Stand (`git push --force-with-lease`)
+// 3. Safe force push verified against local remote-tracking ref (`git push --force-with-lease`)
 repo.push(origin, PushOptions.defaults().forceWithLease());
 
-// 4. Force-Push gegen explizit erwarteten Remote-Commit
+// 4. Force push verified against an explicit expected CommitRef
 Commit expected = repo.commit("origin/main");
 repo.push(origin, current, "main", PushOptions.defaults().forceWithLease(expected));
 
-// 5. Unbedingter Force-Push (`git push -f`)
+// 5. Unconditional force push (`git push -f`)
 repo.push(origin, PushOptions.defaults().force());
 
-// 6. Remote-Branch löschen (`git push origin --delete feat/old`)
+// 6. Delete a remote branch (`git push origin --delete feat/old`)
 repo.deleteRemoteBranch(origin, "feat/old");
-// Oder direkt über das RemoteBranch-Objekt:
+// Or pass a RemoteBranch object directly:
 repo.deleteRemoteBranch(repo.remoteBranch("origin", "feat/old"));
 ```
 
-## Smart HTTP mit eigenem `HttpClient` (Auth & TLS)
+## Smart HTTP with Custom `HttpClient` (Auth & TLS)
 
-Du behältst die volle Kontrolle über Authentifizierung, Proxys, Timeouts und TLS über den Standard-`java.net.http.HttpClient`:
+Your application keeps full control over authentication, proxies, timeouts, and TLS configuration via the standard `java.net.http.HttpClient`:
 
 ```java title="SmartHttpAuth.java"
 import java.net.*;
@@ -92,9 +92,9 @@ repo.fetch(origin, FetchOptions.defaults().prune().httpClient(client));
 repo.push(origin, PushOptions.defaults().setUpstream().httpClient(client));
 ```
 
-## Eigenes Bare-Repository über Smart HTTP hosten
+## Hosting a Bare Repository over Smart HTTP
 
-Mit `httpHandler(...)` kannst du ein Bare-Repository direkt im eingebetteten JDK-`HttpServer` bereitstellen — vollständig kompatibel mit `git clone`, `git fetch` und `git push`:
+Mount any bare repository directly on the JDK's built-in `HttpServer` using `httpHandler(...)` — interoperable with native `git clone`, `git fetch`, and `git push`:
 
 ```java title="HostBareRepo.java"
 import com.sun.net.httpserver.HttpServer;
@@ -110,6 +110,6 @@ server.createContext("/mirror.git", central.httpHandler(GitHttpHandler.Access.RE
 server.start();
 ```
 
-<Callout type="warn" title="Sicherheit beim Hosting">
-  `GitHttpHandler` übernimmt das Git Smart-HTTP-v0-Protokoll inkl. Pack-Validierung, Ref-Locking und Größenlimits (256 MiB Body / 100.000 Pack-Records). Authentifizierung und TLS solltest du über einen Reverse Proxy oder einen JDK-HTTP-Filter vorschalten.
+<Callout type="warn" title="Authentication & TLS">
+  `GitHttpHandler` implements Git Smart HTTP v0 with pack validation, ref locking, and built-in size limits (256 MiB body / 100,000 pack records). Supply authentication and TLS via a JDK HTTP filter or a reverse proxy when exposing repositories beyond localhost.
 </Callout>

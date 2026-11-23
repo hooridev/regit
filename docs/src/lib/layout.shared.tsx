@@ -31,8 +31,8 @@ export function baseOptions(): BaseLayoutProps {
       ),
     },
     links: [
-      { text: 'Dokumentation', url: '/docs', active: 'nested-url' },
-      { text: 'Praxis-Rezepte', url: '/docs/extensions-and-recipes' },
+      { text: 'Documentation', url: '/docs', active: 'nested-url' },
+      { text: 'Recipes', url: '/docs/extensions-and-recipes' },
     ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };

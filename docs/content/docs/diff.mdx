@@ -1,74 +1,74 @@
 ---
-title: Diffs & Code-Änderungen
-description: Unified Patches, --cached, --stat, --shortstat, --name-only, --word-diff, Rename-Erkennung (-M) und Pfadfilter.
+title: Diffs & Code Changes
+description: Unified patches, --cached, --stat, --shortstat, --name-only, --word-diff, rename detection (-M), and path filters.
 ---
 
-Die Diff-Engine von `regit` basiert auf dem **Myers-Algorithmus** (`O((N+M)D)`) und erzeugt Git-kompatible Unified-Hunks inkl. Sektions-Header, Binärdatei-Erkennung und `\ No newline at end of file`.
+`regit`'s diff engine uses the **Myers algorithm** (`O((N+M)D)`) to produce Git-compatible unified hunks complete with section headers, binary detection, and `\ No newline at end of file` markers.
 
-## Die 4 häufigsten Diff-Vergleiche
+## The 4 Most Common Diff Comparisons
 
 ```java title="CommonDiffs.java"
-// 1. Ungestagte Änderungen: Working Tree vs. Index (`git diff`)
+// 1. Unstaged changes: Working Tree vs. Index (`git diff`)
 Diff unstaged = repo.diff();
 
-// 2. Gestagte Änderungen: Index vs. HEAD (`git diff --cached`)
+// 2. Staged changes: Index vs. HEAD (`git diff --cached`)
 Diff staged = repo.diffStaged();
 
-// 3. Working Tree gegen beliebigen Commit oder Branch (`git diff <rev>`)
+// 3. Working Tree against any CommitRef (`git diff <rev>`)
 Diff vsHead = repo.diffWorktree(repo.currentBranch());
 Diff vsBase = repo.diffWorktree(repo.remoteBranch("origin", "main"));
 
-// 4. Zwei Commits / Branches direkt vergleichen (`git diff <from> <to>`)
+// 4. Compare any two commits or branches (`git diff <from> <to>`)
 Branch main = repo.branch("main");
 Branch feature = repo.branch("feature/search");
 Diff branchDiff = repo.diff(main, feature);
 ```
 
-## Ausgabeformate & Schnellprüfungen
+## Output Formats & Quick Checks
 
-Jedes `Diff`-Objekt stellt sowohl strukturierte Daten als auch Git-kompatible Textformate bereit:
+Every `Diff` object exposes both structured Java models and Git-compatible text formatters:
 
 ```java title="DiffFormats.java"
 Diff diff = repo.diffStaged();
 
-// Schneller Leer-Check (`git diff --quiet`)
+// Fast emptiness check (`git diff --quiet`)
 if (diff.isEmpty()) {
-    System.out.println("Keine Änderungen.");
+    System.out.println("No changes.");
     return;
 }
 
-// Nur geänderte Dateinamen (`git diff --name-only`)
+// Changed file paths only (`git diff --name-only`)
 List<String> changedFiles = diff.names();
 
-// Kompakte Zusammenfassung (`git diff --shortstat`)
-// z. B. " 2 files changed, 14 insertions(+), 3 deletions(-)"
+// Compact summary line (`git diff --shortstat`)
+// e.g. " 2 files changed, 14 insertions(+), 3 deletions(-)"
 String shortStat = diff.formatShortStat();
 
-// Strukturierte Statistik
+// Structured counts
 DiffStat stat = diff.stat();
-System.out.printf("%d Dateien, +%d / -%d%n",
+System.out.printf("%d files, +%d / -%d%n",
     stat.filesChanged(), stat.insertions(), stat.deletions());
 
-// Diffstat-Tabelle (`git diff --stat`)
+// Diffstat table (`git diff --stat`)
 System.out.println(diff.formatStat());
 
-// Vollständiger Unified Patch (`git diff`)
+// Full unified patch (`git diff`)
 System.out.println(diff.formatPatch());
 
-// Inline Word-Diff (`git diff --word-diff`, Format: [-alt-]{+neu+})
+// Inline word-level diff (`git diff --word-diff`, markers: [-old-]{+new+})
 System.out.println(diff.formatWordDiff());
 ```
 
-## Optionen: `-U<n>`, `--diff-filter`, `-M` & Pfadfilter
+## Options: `-U<n>`, `--diff-filter`, `-M` & Path Filters
 
-Mit `DiffOptions` konfigurierst du Kontextzeilen, Änderungsfilter, Rename-Erkennung und Pfade fluent und unveränderlich:
+Configure context lines, change filters, rename detection, and path scopes using the immutable `DiffOptions` builder:
 
 ```java title="DiffOptionsExample.java"
 DiffOptions options = DiffOptions.defaults()
-    .contextLines(1)                                       // -U1
-    .detectRenames()                                       // -M (Standard: 50% Ähnlichkeit)
+    .contextLines(1)                                           // -U1
+    .detectRenames()                                           // -M (default 50% similarity)
     .filter(FileDiff.Change.MODIFIED, FileDiff.Change.RENAMED) // --diff-filter=MR
-    .paths(Path.of("src/main"));                           // -- src/main
+    .paths(Path.of("src/main"));                               // -- src/main
 
 Diff filtered = repo.diff(repo.commit("HEAD~5"), repo.headCommit().orElseThrow(), options);
 
@@ -86,10 +86,10 @@ for (FileDiff file : filtered.files()) {
 }
 ```
 
-### Typische `DiffOptions`-Rezepte
+### Common `DiffOptions` Snippets
 
-<Tabs items={['Nur hinzugefügte Dateien', 'Strengere Rename-Schwelle', 'Nur bestimmte Dateien']}>
-  <Tab value="Nur hinzugefügte Dateien">
+<Tabs items={['Added Files Only', 'Strict Rename Threshold', 'Scoped Zero-Context Patch']}>
+  <Tab value="Added Files Only">
 ```java title="AddedOnly.java"
 Diff added = repo.diffStaged(
     DiffOptions.defaults().filter(FileDiff.Change.ADDED)
@@ -97,17 +97,17 @@ Diff added = repo.diffStaged(
 List<String> newFiles = added.names();
 ```
   </Tab>
-  <Tab value="Strengere Rename-Schwelle">
+  <Tab value="Strict Rename Threshold">
 ```java title="StrictRenames.java"
-// -M80% (mindestens 80 % Ähnlichkeit)
+// -M80% (require at least 80% similarity)
 Diff diff = repo.diff("HEAD~1", "HEAD",
     DiffOptions.defaults().detectRenames(80)
 );
 ```
   </Tab>
-  <Tab value="Nur bestimmte Dateien">
+  <Tab value="Scoped Zero-Context Patch">
 ```java title="PathScopedDiff.java"
-// Keine Kontextzeilen (-U0) für präzise Maschinenauswertung
+// Zero context lines (-U0) for compact programmatic inspection
 Diff patch = repo.diff(
     DiffOptions.defaults()
         .contextLines(0)
@@ -117,9 +117,9 @@ Diff patch = repo.diff(
   </Tab>
 </Tabs>
 
-## Commit-Diff anzeigen (`git show`)
+## Showing a Commit Diff (`git show`)
 
-`showDiff(...)` vergleicht einen Commit mit seinem ersten Parent (oder mit dem leeren Tree beim Root-Commit):
+`showDiff(...)` diffs a commit against its first parent (or against the empty tree for a root commit):
 
 ```java title="ShowCommitDiff.java"
 Commit head = repo.headCommit().orElseThrow();

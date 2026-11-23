@@ -1,33 +1,33 @@
 ---
-title: Log, Suche & Merge-Base
-description: Historie durchlaufen, filtern, nach Code-Änderungen suchen (-S / -L) und gemeinsame Vorfahren berechnen.
+title: Log, Search & Merge-Base
+description: Traverse history, filter commits, search code changes (-S / -L), and compute common ancestors.
 ---
 
-## Einfache Log-Abfragen (`git log`)
+## Simple Log Queries (`git log`)
 
-Die Kurzformen decken die häufigsten Aufrufe direkt mit einem Einzeiler ab:
+Shorthand overloads cover the most frequent history lookups in a single line:
 
 ```java title="QuickLogs.java"
-// Gesamte Historie ab HEAD
+// Full history from HEAD
 List<Commit> all = repo.log();
 
-// Letzte 10 Commits (`git log -10`)
+// Latest 10 commits (`git log -10`)
 List<Commit> recent = repo.log(10);
 
-// Ab einem Branch, RemoteBranch oder Commit
-List<Commit> branchLog = repo.log(repo.branch("main"), 20);
-List<Commit> remoteLog = repo.log(repo.remoteBranch("origin", "main"), 5);
+// Starting from a Branch, RemoteBranch, or Commit
+List<Commit> branchLog  = repo.log(repo.branch("main"), 20);
+List<Commit> remoteLog  = repo.log(repo.remoteBranch("origin", "main"), 5);
 List<Commit> fromCommit = repo.log(repo.commit("v1.0"), 10);
 
-// Oneline-Ausgabe (`git log --oneline -10`)
+// Oneline formatting (`git log --oneline -10`)
 for (Commit c : repo.log(10)) {
     System.out.println(c.shortId() + " " + c.subject());
 }
 ```
 
-## Fluente `Log`-Queries
+## Fluent `Log` Queries
 
-Für komplexe Filter kombiniert die unveränderliche `Log`-Klasse Bereiche, Sortierungen, Merge-Filter, Regex-Suchen, Zeiträume und Pfade:
+Combine commit ranges, topological ordering, merge filters, regex matching, date bounds, and path history simplification with the immutable `Log` builder:
 
 ```java title="FluentLog.java"
 import io.github.regit.*;
@@ -50,28 +50,28 @@ List<Commit> commits = repo.log(
 );
 ```
 
-### Bereiche & Referenzen
+### Ranges & Ref Selectors
 
 ```java title="LogRanges.java"
 Branch main = repo.branch("main");
 RemoteBranch originMain = repo.remoteBranch("origin", "main");
 
-// Commits auf main, die noch nicht auf origin/main sind (origin/main..main)
+// Commits on main not yet on origin/main (origin/main..main)
 List<Commit> unpushed = repo.log(Log.range(originMain, main));
 
-// Symmetrische Differenz (origin/main...main)
+// Symmetric difference (origin/main...main)
 List<Commit> diverged = repo.log(Log.symmetricRange(originMain, main));
 
-// Alle Refs im Repository (`git log --all`, `--branches`, `--tags`)
-List<Commit> acrossAll = repo.log(Log.all().limit(50));
+// Walk all refs, all branches, or all tags (`--all`, `--branches`, `--tags`)
+List<Commit> acrossAll  = repo.log(Log.all().limit(50));
 List<Commit> onlyMerges = repo.log(Log.branches().mergesOnly());
 
-// Exakte Identity filtern (Regex-Sonderzeichen im Namen werden automatisch escaped)
+// Match an exact Identity (regex metacharacters are automatically escaped)
 Identity alice = repo.headCommit().orElseThrow().author();
 List<Commit> byAlice = repo.log(Log.of().author(alice));
 ```
 
-## Log mit Statistiken (`git log --stat`)
+## Log with Diff Statistics (`git log --stat`)
 
 ```java title="LogWithStat.java"
 List<CommitDiff> entries = repo.logWithDiff(
@@ -85,12 +85,12 @@ for (CommitDiff entry : entries) {
 }
 ```
 
-## Pickaxe-Suche (`git log -S`)
+## Pickaxe Search (`git log -S`)
 
-Findet genau die Commits, in denen die Anzahl der Vorkommen eines Suchbegriffs in einer Datei zu- oder abgenommen hat:
+Finds commits where the number of occurrences of a search string changed in at least one file:
 
 ```java title="PickaxeSearch.java"
-// Wann wurde "LEGACY_FEATURE_FLAG" eingeführt oder entfernt?
+// Find when "LEGACY_FEATURE_FLAG" was introduced or removed
 List<Commit> hits = repo.log(
     Log.of()
        .pickaxe("LEGACY_FEATURE_FLAG")
@@ -102,16 +102,16 @@ for (Commit c : hits) {
 }
 ```
 
-## Zeilenhistorie (`git log -L`)
+## Line-Range History (`git log -L`)
 
-Verfolgt die Entwicklung eines konkreten Zeilenbereichs (1-basiert, inklusiv) rückwärts durch die Historie — inklusive automatischer Zeilenverschiebung durch frühere Commits:
+Tracks the evolution of a 1-based inclusive line range backwards through history, adjusting line offsets across earlier edits:
 
 ```java title="LineHistory.java"
-// Entwicklung der Zeilen 10 bis 25 in src/Parser.java ab HEAD
+// Trace lines 10..25 of src/Parser.java starting from HEAD
 List<LineLogEntry> evolution = repo.logLines(Path.of("src/Parser.java"), 10, 25);
 
 for (LineLogEntry step : evolution) {
-    System.out.printf("%s (Zeilen %d..%d): %s%n",
+    System.out.printf("%s (lines %d..%d): %s%n",
         step.commit().shortId(),
         step.startLine(),
         step.endLine(),
@@ -119,23 +119,23 @@ for (LineLogEntry step : evolution) {
     System.out.println(step.hunk().format());
 }
 
-// Oder ab einem bestimmten Branch / Commit starten
+// Or start from an explicit CommitRef
 List<LineLogEntry> fromRelease = repo.logLines(repo.commit("v1.0"), "src/Parser.java", 1, 20);
 ```
 
-## Merge-Base & Vorfahren prüfen (`git merge-base`)
+## Merge-Base & Ancestry (`git merge-base`)
 
 ```java title="MergeBaseExample.java"
 Branch main = repo.branch("main");
 Branch topic = repo.branch("topic");
 Commit release = repo.commit("v1.0");
 
-// Prüfen, ob release bereits in main enthalten ist (`git merge-base --is-ancestor`)
+// Check whether release is already an ancestor of main (`git merge-base --is-ancestor`)
 boolean containsRelease = repo.isAncestor(release, main);
 
-// Gemeinsamen Vorfahren bestimmen (`git merge-base main topic`)
+// Find the best common ancestor (`git merge-base main topic`)
 Optional<Commit> commonAncestor = repo.mergeBase(main, topic);
 
-// Alle maximalen gemeinsamen Vorfahren bei Criss-Cross-Merges (`git merge-base --all`)
+// Find all maximal common ancestors in criss-cross merges (`git merge-base --all`)
 List<Commit> allBases = repo.mergeBases(main, topic);
 ```

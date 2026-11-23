@@ -1,19 +1,19 @@
 {
-  "title": "Dokumentation",
+  "title": "Documentation",
   "pages": [
     "index",
-    "---Grundlagen---",
+    "---Fundamentals---",
     "repositories",
     "staging-and-commits",
-    "---Historie & Analyse---",
+    "---History & Analysis---",
     "diff",
     "log-and-history",
-    "---Branches & Parallelität---",
+    "---Branches & Concurrency---",
     "branches-and-checkout",
     "worktrees",
-    "---Integration & Konflikte---",
+    "---Integration & Conflicts---",
     "merge-and-rebase",
-    "---Synchronisation & Erweiterung---",
+    "---Sync & Extensibility---",
     "remotes-and-hosting",
     "extensions-and-recipes"
   ]

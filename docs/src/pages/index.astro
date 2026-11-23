@@ -6,26 +6,26 @@ import { docsRoute } from '@/lib/shared';
 
 <Layout
   title="regit — Pure Java 25 Git Library"
-  description="Objektorientierte, abhängigkeitsfreie Java-25-Bibliothek für Git-Repositories, Diffs, Worktrees, Remotes, Merge und Rebase."
+  description="Object-oriented, zero-dependency Java 25 library for Git repositories, diffs, worktrees, remotes, merge, and rebase."
 >
   <Home client:load pathname={Astro.url.pathname} params={Astro.params}>
     <main class="mx-auto flex w-full max-w-5xl flex-1 flex-col items-center justify-center px-6 py-16 text-center">
       <div class="mb-6 inline-flex items-center gap-2 rounded-full border border-fd-border bg-fd-secondary/60 px-3.5 py-1 text-xs font-medium text-fd-secondary-foreground">
         <span class="size-2 rounded-full bg-rose-500"></span>
-        Java 25 · Zero Runtime Dependencies · Git-kompatibel
+        Java 25 · Zero Runtime Dependencies · Git-Compatible
       </div>
 
       <h1 class="max-w-3xl text-4xl font-bold tracking-tight sm:text-5xl">
-        Git in Java — typsicher, objektorientiert und ohne CLI-Prozesse.
+        Git in Java — type-safe, object-oriented, and without CLI subprocesses.
       </h1>
 
       <p class="mt-4 max-w-2xl text-base text-fd-muted-foreground sm:text-lg">
-        <strong class="font-semibold text-fd-foreground">regit</strong> bietet eine saubere Java-API mit
-        First-Class-Objekten wie <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">Repository</code>,
+        <strong class="font-semibold text-fd-foreground">regit</strong> provides a clean Java API with
+        first-class domain objects like <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">Repository</code>,
         <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">Branch</code>,
         <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">Commit</code>,
-        <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">RemoteBranch</code> und
-        <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">Diff</code> — vollständig kompatibel mit nativem Git.
+        <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">RemoteBranch</code>, and
+        <code class="rounded bg-fd-muted px-1.5 py-0.5 text-sm">Diff</code> — fully interoperable with native Git.
       </p>
 
       <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -33,13 +33,13 @@ import { docsRoute } from '@/lib/shared';
           class="inline-flex items-center justify-center rounded-full bg-fd-primary px-6 py-2.5 text-sm font-medium text-fd-primary-foreground transition hover:opacity-90"
           href={docsRoute}
         >
-          Zur Dokumentation
+          Read the Docs
         </a>
         <a
           class="inline-flex items-center justify-center rounded-full border border-fd-border bg-fd-background px-6 py-2.5 text-sm font-medium text-fd-foreground transition hover:bg-fd-accent"
           href={`${docsRoute}/extensions-and-recipes`}
         >
-          Praxis-Rezepte ansehen
+          Browse Recipes
         </a>
       </div>
 
@@ -50,8 +50,8 @@ import { docsRoute } from '@/lib/shared';
         >
           <h2 class="font-semibold text-fd-card-foreground">Myers Diff &amp; Log</h2>
           <p class="mt-1.5 text-sm text-fd-muted-foreground">
-            Unified Patches, <code>--stat</code>, <code>--word-diff</code>, Rename-Erkennung (<code>-M</code>),
-            Pickaxe (<code>-S</code>) und Zeilenhistorie (<code>-L</code>).
+            Unified patches, <code>--stat</code>, <code>--word-diff</code>, rename detection (<code>-M</code>),
+            pickaxe (<code>-S</code>), and line history (<code>-L</code>).
           </p>
         </a>
 
@@ -59,9 +59,9 @@ import { docsRoute } from '@/lib/shared';
           href={`${docsRoute}/worktrees`}
           class="rounded-xl border border-fd-border bg-fd-card p-5 transition hover:border-fd-primary/50"
         >
-          <h2 class="font-semibold text-fd-card-foreground">Isolierte Worktrees</h2>
+          <h2 class="font-semibold text-fd-card-foreground">Isolated Worktrees</h2>
           <p class="mt-1.5 text-sm text-fd-muted-foreground">
-            Ein eigener Checkout pro Agent mit eigenem Index, eigenem HEAD und parallelen Commits ohne gegenseitige Blockaden.
+            One checkout per agent with its own index, HEAD, and operation lock for safe concurrent commits.
           </p>
         </a>
 
@@ -72,7 +72,7 @@ import { docsRoute } from '@/lib/shared';
           <h2 class="font-semibold text-fd-card-foreground">Merge, Rebase &amp; Remotes</h2>
           <p class="mt-1.5 text-sm text-fd-muted-foreground">
             <code>--no-ff</code>, <code>--ff-only</code>, <code>--onto</code>, <code>--autosquash</code>,
-            Konflikt-Workflows sowie Smart-HTTP Fetch, Prune &amp; Force-with-Lease.
+            conflict workflows, and Smart HTTP fetch, prune &amp; force-with-lease.
           </p>
         </a>
       </div>

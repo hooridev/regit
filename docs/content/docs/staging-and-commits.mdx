@@ -1,11 +1,11 @@
 ---
 title: Status, Staging & Commits
-description: Arbeitsverzeichnis prüfen, Dateien mit -A/-u/-N stagen sowie Commits mit -a, --amend und --fixup erstellen.
+description: Inspect working tree status, stage files with -A/-u/-N, and create commits with -a, --amend, and --fixup.
 ---
 
-## Status prüfen (`git status`)
+## Checking Status (`git status`)
 
-`repo.status()` liefert ein strukturiertes `Status`-Objekt mit allen gestagten, ungestagten und ungetrackten Pfaden in kanonischer Git-Byte-Reihenfolge. `.gitignore` und `.git/info/exclude` werden automatisch berücksichtigt.
+`repo.status()` returns a structured `Status` record with staged, unstaged, and untracked paths in Git's canonical byte order. Worktree `.gitignore` files and `.git/info/exclude` are evaluated automatically.
 
 ```java title="CheckStatus.java"
 Status status = repo.status();
@@ -14,78 +14,78 @@ Status status = repo.status();
 status.staged().forEach((path, change) ->
     System.out.println("staged   " + change + " " + path));
 
-// Unstaged (Worktree vs. Index)
+// Unstaged (Working Tree vs. Index)
 status.unstaged().forEach((path, change) ->
     System.out.println("unstaged " + change + " " + path));
 
-// Untracked (neue, nicht ignorierte Dateien)
+// Untracked (new, non-ignored files)
 status.untracked().forEach(path ->
     System.out.println("untracked " + path));
 ```
 
-### Ignorierte Dateien & Upstream-Status (`--ignored` / `-sb`)
+### Ignored Files & Upstream Tracking (`--ignored` / `-sb`)
 
 ```java title="StatusExtras.java"
-// Alle ignorierten Dateien auflisten (analog `git status --ignored`)
+// List ignored untracked files (`git status --ignored`)
 SortedSet<String> ignored = repo.ignoredFiles();
 
-// Upstream-Tracking & Ahead/Behind (analog `git status -sb`)
+// Upstream tracking & ahead/behind counts (`git status -sb`)
 repo.branchTracking().ifPresent(tracking -> {
     System.out.printf("## %s...%s %s%n",
         repo.abbrevRef(),
         tracking.upstream().fullName(),
-        tracking.formatShort()); // z. B. "[ahead 2, behind 1]"
+        tracking.formatShort()); // e.g. "[ahead 2, behind 1]"
 });
 ```
 
-## Dateien stagen (`git add`)
+## Staging Files (`git add`)
 
-`regit` deckt alle gängigen Staging-Varianten direkt über sprechende Methoden ab:
+`regit` covers all common staging workflows with explicit, readable methods:
 
-<Tabs items={['Alles (-A)', 'Nur getrackte (-u)', 'Gezielte Pfade / Ordner', 'Intent-to-Add (-N)']}>
-  <Tab value="Alles (-A)">
+<Tabs items={['All (-A)', 'Tracked Only (-u)', 'Specific Paths / Dirs', 'Intent-to-Add (-N)']}>
+  <Tab value="All (-A)">
 ```java title="StageAll.java"
-// Alle geänderten, gelöschten und neuen (nicht ignorierten) Dateien stagen
+// Stage all modified, deleted, and non-ignored untracked files
 repo.stageAll();
 
-// Eingeschränkt auf bestimmte Verzeichnisse oder Dateien
+// Scoped to specific directories or files
 repo.stageAll(Path.of("src"), Path.of("README.md"));
 ```
   </Tab>
-  <Tab value="Nur getrackte (-u)">
+  <Tab value="Tracked Only (-u)">
 ```java title="StageUpdated.java"
-// Alle geänderten und gelöschten bereits getrackten Dateien stagen (keine Untracked)
+// Stage all modified and deleted tracked files without adding untracked files
 repo.stageUpdated();
 
-// Nur innerhalb von src/
+// Scoped to src/
 repo.stageUpdated(Path.of("src"));
 ```
   </Tab>
-  <Tab value="Gezielte Pfade / Ordner">
+  <Tab value="Specific Paths / Dirs">
 ```java title="StagePaths.java"
-// Einzelne Dateien (repo-relativ); fehlende getrackte Dateien stagen eine Löschung
+// Exact repo-relative file paths; missing tracked files stage a deletion
 repo.stage("README.md", "src/App.java");
 
-// Path-Überladung unterstützt sowohl einzelne Dateien als auch ganze Ordner
+// Path overload supports both individual files and recursive directories
 repo.stage(Path.of("src/main"), Path.of("pom.xml"));
 ```
   </Tab>
   <Tab value="Intent-to-Add (-N)">
 ```java title="StageIntentToAdd.java"
-// Neue Datei im Index v3 als intent-to-add vormerken (erscheint in diff(), nicht in diffStaged())
+// Record untracked files in index v3 as intent-to-add (visible in diff(), omitted from diffStaged())
 repo.stageIntentToAdd("src/NewFeature.java");
 repo.stageIntentToAdd(Path.of("docs/notes.md"));
 ```
   </Tab>
 </Tabs>
 
-<Callout type="warn" title="Ignore-Schutz bei explizitem Staging">
-  Wenn beim expliziten Aufruf von `stage(...)` oder `stageIntentToAdd(...)` ein noch ungetrackter Pfad durch `.gitignore` ausgeschlossen ist, bricht die Operation atomar mit `IOException` ab, ohne Blobs oder den Index zu verändern.
+<Callout type="warn" title="Atomic ignore protection on explicit staging">
+  If any new path passed to `stage(...)` or `stageIntentToAdd(...)` is excluded by `.gitignore`, the call fails atomically with an `IOException` before writing any blobs or modifying the index.
 </Callout>
 
-## Commits erstellen (`git commit`)
+## Creating Commits (`git commit`)
 
-Jeder Commit trägt explizite `Identity`-Objekte für Author und Committer mit Zeitstempel und UTC-Offset — ideal für reproduzierbare Builds und Agenten-Commits.
+Every commit takes explicit `Identity` instances for author and committer with timestamps and UTC offsets — ideal for reproducible builds and deterministic agent commits.
 
 ```java title="BasicCommit.java"
 import io.github.regit.*;
@@ -104,35 +104,35 @@ Commit created = repo.commit(
 System.out.println("Created commit: " + created.shortId());
 ```
 
-### Alle gängigen Commit-Varianten (`-a`, `--amend`, `--no-edit`, `--fixup`)
+### Common Commit Workflows (`-a`, `--amend`, `--no-edit`, `--fixup`)
 
 ```java title="CommitVariants.java"
 var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
 var committer = new Identity("CI Bot", "ci@example.org", OffsetDateTime.now());
 
-// 1. Tracked Changes automatisch stagen & committen (`git commit -a -m ...`)
+// 1. Auto-stage modified/deleted tracked files and commit (`git commit -a -m ...`)
 Commit c1 = repo.commitAll("fix: handle null input\n", author, author);
 
-// 2. Letzten Commit mit neuer Nachricht überschreiben (`git commit --amend -m ...`)
+// 2. Replace HEAD commit with a new message (`git commit --amend -m ...`)
 Commit c2 = repo.amend("fix(parser): handle null input safely\n", author, committer);
 
-// 3. Letzten Commit ändern, Author & Message behalten (`git commit --amend --no-edit`)
+// 3. Amend HEAD while keeping its original author and message (`git commit --amend --no-edit`)
 repo.stage("src/ParserTest.java");
 Commit c3 = repo.amendNoEdit(committer);
 
-// 4. Fixup-Commit für späteres `rebase --autosquash` (`git commit --fixup=<commit>`)
+// 4. Create a fixup! commit for later `rebase --autosquash` (`git commit --fixup=<commit>`)
 Commit target = repo.commit("HEAD~2");
 Commit fixup = repo.fixup(target, author, author);
-// Erzeugt exakt: "fixup! <subject von target>\n"
+// Produces exact message: "fixup! <subject of target>\n"
 
-// 5. Fixup kombiniert mit -a (`git commit -a --fixup=<commit>`)
+// 5. Combine fixup with -a (`git commit -a --fixup=<commit>`)
 Commit fixupAll = repo.fixup(target, author, author, CommitOptions.defaults().all());
 
-// 6. Leeren Commit explizit erlauben (`git commit --allow-empty`)
+// 6. Explicitly allow an empty commit (`git commit --allow-empty`)
 Commit trigger = repo.commit("chore: trigger build\n", author, author,
     CommitOptions.defaults().allowEmpty());
 ```
 
-<Callout type="info" title="Detached HEAD & Merge-Abschluss">
-  `commit(...)` funktioniert sowohl auf lokalen Branches als auch im **Detached-HEAD-Modus**. Ist ein Merge pausiert (`MERGE_HEAD` vorhanden), erzeugt `commit(...)` nach aufgelösten Konflikten automatisch einen 2-Parent-Merge-Commit.
+<Callout type="info" title="Detached HEAD & concluding merges">
+  `commit(...)` works both on local branches and on a **detached HEAD**. When a merge is paused (`MERGE_HEAD` exists) and all conflicts are staged, `commit(...)` automatically writes a 2-parent merge commit and cleans up merge state.
 </Callout>

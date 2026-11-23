@@ -1,38 +1,38 @@
 ---
-title: Merge, Rebase & Konfliktauflösung
-description: Merge-Modi (--no-ff, --ff-only, --no-commit), Rebase (--onto, --autosquash, Pläne) sowie Git-kompatible Konflikt-Workflows.
+title: Merge, Rebase & Conflict Resolution
+description: Merge modes (--no-ff, --ff-only, --no-commit), rebase (--onto, --autosquash, plans), and Git-compatible conflict workflows.
 ---
 
-## Merge-Strategien (`git merge`)
+## Merge Modes (`git merge`)
 
-`merge(...)` akzeptiert jede `CommitRef` (`Branch`, `RemoteBranch`, `Commit`, `CommitRef.of(...)`) und steuert das Verhalten über `MergeOptions`:
+`merge(...)` accepts any `CommitRef` (`Branch`, `RemoteBranch`, `Commit`, `CommitRef.of(...)`) and configures behavior via `MergeOptions`:
 
 ```java title="MergeModes.java"
 Branch feature = repo.branch("feat/search");
 var committer = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
 
-// 1. Standard: Fast-Forward wenn möglich, sonst 2-Parent-Merge-Commit
+// 1. Default: fast-forward if possible, otherwise write a 2-parent merge commit
 MergeResult standard = repo.merge(feature, committer, "merge: feat/search\n",
     MergeOptions.defaults());
 
-// 2. Immer einen Merge-Commit erzeugen (`git merge --no-ff`)
+// 2. Always write a merge commit (`git merge --no-ff`)
 MergeResult noFf = repo.merge(feature, committer, "merge: feat/search\n",
     MergeOptions.defaults().noFastForward());
 
-// 3. Nur Fast-Forward erlauben, sonst IOException (`git merge --ff-only`)
+// 3. Fast-forward only; throw IOException on divergence (`git merge --ff-only`)
 MergeResult ffOnly = repo.merge(repo.remoteBranch("origin", "main"), committer, "",
     MergeOptions.defaults().fastForwardOnly());
 
-// 4. Merge nur stagen + MERGE_HEAD schreiben, ohne Commit (`git merge --no-commit`)
+// 4. Stage merge & write MERGE_HEAD without committing (`git merge --no-commit`)
 MergeResult staged = repo.merge(feature, committer, "merge: feat/search\n",
     MergeOptions.defaults().noCommit());
-// Danach prüfen/anpassen und abschließen (erzeugt automatisch 2-Parent-Commit):
+// Inspect or edit staged files, then conclude (writes 2-parent merge commit):
 Commit mergeCommit = repo.commit(null, committer, committer, CommitOptions.defaults());
 ```
 
-## Konflikte mit `--ours` / `--theirs` auflösen
+## Resolving Conflicts with `--ours` / `--theirs`
 
-Standardmäßig bricht `merge` bzw. `rebase` bei Konflikten atomar mit `MergeConflict` ab, ohne den Worktree zu verändern. Mit `.allowConflicts()` schreibt `regit` stattdessen den vollständigen Git-Konfliktzustand (Konfliktmarker `<<<<<<<`/`=======`/`>>>>>>>`, Index-Stages 1/2/3 sowie `MERGE_HEAD` bzw. `.git/rebase-merge/`):
+By default, `merge` and `rebase` throw `MergeConflict` atomically without modifying the working tree or index. Opt in to `.allowConflicts()` to write full Git conflict state (conflict markers `<<<<<<<`/`=======`/`>>>>>>>`, index stages 1/2/3, and `MERGE_HEAD` or `.git/rebase-merge/`):
 
 ```java title="ResolveMergeConflict.java"
 MergeResult result = repo.merge(
@@ -43,34 +43,34 @@ MergeResult result = repo.merge(
 );
 
 if (result.isConflicted()) {
-    System.out.println("Konflikte: " + repo.conflictedFiles());
+    System.out.println("Conflicted paths: " + repo.conflictedFiles());
 
-    // Datei 1: unsere Version übernehmen (`git checkout --ours`)
+    // File 1: keep our version (`git checkout --ours`)
     repo.checkoutOurs("config/app.properties");
 
-    // Datei 2: eingehende Version übernehmen (`git checkout --theirs`)
+    // File 2: take incoming version (`git checkout --theirs`)
     repo.checkoutTheirs(Path.of("docs/README.md"));
 
-    // Alternativ: Datei manuell bearbeiten und danach stagen
+    // Or edit files manually, then stage to clear conflict stages 1..3
     repo.stage("config/app.properties", "docs/README.md");
 
-    // Merge mit 2 Parents abschließen
+    // Conclude the 2-parent merge commit
     Commit merged = repo.commit("merge: resolved conflicts\n", committer, committer,
         CommitOptions.defaults());
 }
 ```
 
-### Merge abbrechen (`git merge --abort`)
+### Aborting a Merge (`git merge --abort`)
 
 ```java title="AbortMerge.java"
 if (repo.isMergeInProgress()) {
-    repo.abortMerge(); // Stellt HEAD, Index und Working Tree sauber wieder her
+    repo.abortMerge(); // Restores HEAD, index, and working tree cleanly
 }
 ```
 
 ## Rebase (`git rebase`)
 
-### Rebase auf einen Branch oder `RemoteBranch` (`origin/main`)
+### Rebasing onto a Branch or `RemoteBranch` (`origin/main`)
 
 ```java title="RebaseOntoOrigin.java"
 repo.fetch("origin");
@@ -80,10 +80,10 @@ RebaseResult res = repo.rebase(originMain, committer, RebaseOptions.defaults());
 System.out.println("Rebase status: " + res.status() + " -> " + res.head().orElseThrow().shortId());
 ```
 
-### Teil-Historie umhängen (`git rebase --onto`)
+### Transplanting a Commit Range (`git rebase --onto`)
 
 ```java title="RebaseOnto.java"
-// Nur die Commits in `oldParent..HEAD` auf `newBase` umhängen
+// Replay only `oldParent..HEAD` onto `newBase`
 Branch oldParent = repo.branch("feat/base");
 Branch newBase = repo.branch("main");
 
@@ -94,16 +94,16 @@ RebaseResult res = repo.rebase(
 );
 ```
 
-### Autosquash (`git rebase -i --autosquash`) & eigene Pläne
+### Autosquash (`git rebase -i --autosquash`) & Custom Plans
 
-`fixup!`-Commits (erstellt mit `repo.fixup(...)`) und `squash!`-Commits werden automatisch hinter ihren Ziel-Commit einsortiert und eingearbeitet:
+`fixup!` commits (created with `repo.fixup(...)`) and `squash!` commits are automatically reordered directly after their target commit and folded in:
 
-<Tabs items={['Autosquash', 'Expliziter Rebase-Plan']}>
+<Tabs items={['Autosquash', 'Explicit Rebase Plan']}>
   <Tab value="Autosquash">
 ```java title="RebaseAutosquash.java"
 RemoteBranch originMain = repo.remoteBranch("origin", "main");
 
-// Sortiert alle `fixup!` und `squash!` Commits automatisch ein
+// Automatically reorders and applies all `fixup!` and `squash!` commits
 RebaseResult res = repo.rebase(
     originMain,
     committer,
@@ -111,15 +111,15 @@ RebaseResult res = repo.rebase(
 );
 ```
   </Tab>
-  <Tab value="Expliziter Rebase-Plan">
+  <Tab value="Explicit Rebase Plan">
 ```java title="InteractiveRebasePlan.java"
 Branch main = repo.branch("main");
 List<Commit> commits = repo.log(Log.range(main, repo.currentBranch()).reverse());
 
 List<RebaseStep> plan = List.of(
     RebaseStep.reword(commits.get(0), "feat: polished title\n"),
-    RebaseStep.fixup(commits.get(1)),   // in commits[0] einfalten
-    RebaseStep.drop(commits.get(2)),    // überspringen
+    RebaseStep.fixup(commits.get(1)),   // fold into commits[0]
+    RebaseStep.drop(commits.get(2)),    // drop commit
     RebaseStep.pick(commits.get(3))
 );
 
@@ -128,7 +128,7 @@ RebaseResult res = repo.rebase(main, committer, RebaseOptions.defaults().plan(pl
   </Tab>
 </Tabs>
 
-### Pausierbarer Rebase (`--continue` & `--abort`)
+### Pausable Rebase (`--continue` & `--abort`)
 
 ```java title="RebaseConflictFlow.java"
 RebaseResult res = repo.rebase(
@@ -138,23 +138,23 @@ RebaseResult res = repo.rebase(
 );
 
 while (res.isConflicted()) {
-    System.out.println("Stopp bei Commit: " + res.stoppedCommit().orElseThrow().shortId());
-    System.out.println("Konflikte: " + res.conflicts());
+    System.out.println("Stopped at commit: " + res.stoppedCommit().orElseThrow().shortId());
+    System.out.println("Conflicts: " + res.conflicts());
 
-    // Konflikte lösen (z. B. eingehenden Commit behalten) und stagen
+    // Resolve conflicts (e.g. keep incoming commit's changes) and stage
     for (String path : res.conflicts()) {
         repo.checkoutTheirs(path);
         repo.stage(path);
     }
 
-    // Rebase fortsetzen (`git rebase --continue`)
+    // Resume rebase (`git rebase --continue`)
     res = repo.continueRebase(committer);
 }
 
-// Oder jederzeit abbrechen (`git rebase --abort`):
+// Or abort at any time (`git rebase --abort`):
 // if (repo.isRebaseInProgress()) repo.abortRebase();
 ```
 
-<Callout type="info" title="100 % Interoperabilität mit nativem Git">
-  Ein von `regit` pausierter Merge oder Rebase schreibt exakt `.git/MERGE_HEAD` bzw. `.git/rebase-merge/*` und Index-Stages 1–3. Du kannst den Zustand jederzeit auch mit nativem `git status`, `git rebase --continue` oder `git merge --abort` weiterbearbeiten — und umgekehrt.
+<Callout type="info" title="100% Native Git Interoperability">
+  A paused merge or rebase writes standard `.git/MERGE_HEAD` or `.git/rebase-merge/*` files along with index stages 1–3. You can inspect, continue, or abort a `regit`-initiated conflict with native `git` — and vice versa.
 </Callout>

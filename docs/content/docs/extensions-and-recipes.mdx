@@ -1,11 +1,11 @@
 ---
-title: Lifecycle-Hooks & Praxis-Rezepte
-description: Eigene Policies per Lifecycle-Hook, benutzerdefinierte ContentMerge-Strategien und kopierbare End-to-End-Rezepte.
+title: Lifecycle Hooks & Recipes
+description: Policy enforcement via Lifecycle hooks, custom ContentMerge strategies, and copy-paste end-to-end recipes.
 ---
 
-## Lifecycle-Hooks (Policy-Veto & Audit-Log)
+## Lifecycle Hooks (Policy Vetoes & Audit Logging)
 
-Mit `withLifecycle(...)` kannst du jede schreibende Operation vor der Ausführung prüfen (und per `IOException` blockieren) oder nach erfolgreicher Ausführung protokollieren. Verknüpfte Worktrees erben den Hook automatisch.
+Use `withLifecycle(...)` to inspect or veto any mutating operation before it takes effect (by throwing `IOException`), and to emit audit logs once an operation succeeds. Linked worktrees inherit configured hooks automatically.
 
 ```java title="LifecyclePolicy.java"
 import io.github.regit.*;
@@ -14,23 +14,23 @@ import java.io.IOException;
 Repository guarded = repo.withLifecycle(new Lifecycle() {
     @Override
     public void before(Event event) throws IOException {
-        // Beispiel: Direktes Pushen oder Löschen auf main verbieten
+        // Example: prevent deleting main
         if (event.operation() == Operation.DELETE_BRANCH && "main".equals(event.target())) {
-            throw new IOException("Policy veto: main darf nicht gelöscht werden");
+            throw new IOException("Policy veto: main cannot be deleted");
         }
     }
 
     @Override
     public void after(Event event) {
-        System.out.printf("[AUDIT] %s auf %s (target=%s)%n",
+        System.out.printf("[AUDIT] %s on %s (target=%s)%n",
             event.operation(), event.repository(), event.target());
     }
 });
 ```
 
-## Eigene `ContentMerge`-Strategie
+## Custom `ContentMerge` Strategy
 
-Bei konkurrierenden Änderungen an derselben Datei kannst du für strukturierte Formate (z. B. `manifest.json`, Lockfiles, Changelogs) eine eigene Merge-Logik hinterlegen und alle anderen Dateien an `ContentMerge.text()` delegieren:
+For structured files (such as manifests, lockfiles, or version files), provide a custom three-way merge policy and delegate all other paths to `ContentMerge.text()`:
 
 ```java title="CustomContentMerge.java"
 import io.github.regit.*;
@@ -38,7 +38,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 Repository smartRepo = repo.withContentMerge((path, base, current, incoming) -> {
     if (path.equals("VERSION")) {
-        // Immer die höhere Versionszeile wählen
+        // Always pick the higher version line
         String a = new String(current, UTF_8).strip();
         String b = new String(incoming, UTF_8).strip();
         return ((a.compareTo(b) >= 0 ? a : b) + "\n").getBytes(UTF_8);
@@ -49,51 +49,51 @@ Repository smartRepo = repo.withContentMerge((path, base, current, incoming) -> 
 
 ---
 
-## Kopierbare Praxis-Rezepte
+## Copy-Paste Recipes
 
-### Rezept 1: Pull-Request-Vorbereitung (Fetch, Autosquash-Rebase, Safe Push)
+### Recipe 1: Prepare a Pull Request (Fetch, Autosquash Rebase, Safe Push)
 
-Typischer Agenten-Workflow: aktuellen Stand von `origin/main` holen, `fixup!`-Commits sauber einfalten und sicher per `--force-with-lease` pushen.
+A common agent and CI workflow: fetch `origin` with pruning, fold all `fixup!` commits onto `origin/main`, generate a diff summary, and push safely with `--force-with-lease`.
 
 ```java title="PreparePullRequest.java"
 Remote origin = repo.remote("origin");
 var committer = new Identity("Dev Agent", "agent@example.org", OffsetDateTime.now());
 
-// 1. Remote aktualisieren & veraltete Branches prunen
+// 1. Update remote-tracking refs & prune stale branches
 repo.fetch(origin, FetchOptions.defaults().prune());
 RemoteBranch originMain = repo.remoteBranch("origin", "main");
 
-// 2. Aktuellen Feature-Branch mit --autosquash auf origin/main rebasen
+// 2. Rebase current feature branch onto origin/main with --autosquash
 RebaseResult rebased = repo.rebase(
     originMain,
     committer,
     RebaseOptions.defaults().autosquash().allowConflicts()
 );
 if (rebased.isConflicted()) {
-    throw new IllegalStateException("Rebase-Konflikt in: " + rebased.conflicts());
+    throw new IllegalStateException("Rebase conflict in: " + rebased.conflicts());
 }
 
-// 3. Diff-Zusammenfassung für die PR-Beschreibung erzeugen
+// 3. Summarize changes for the PR description
 Diff prDiff = repo.diff(originMain, repo.currentBranch(), DiffOptions.defaults().detectRenames());
-System.out.println("PR-Umfang: " + prDiff.formatShortStat());
+System.out.println("PR scope: " + prDiff.formatShortStat());
 
-// 4. Sicher pushen (schlägt fehl, falls jemand anderes den Branch inzwischen geändert hat)
+// 4. Push safely (fails if someone else updated the remote branch)
 repo.push(origin, PushOptions.defaults().forceWithLease().setUpstream());
 ```
 
-### Rezept 2: Alle bereits gemergten Feature-Branches aufräumen
+### Recipe 2: Clean Up All Merged Feature Branches
 
 ```java title="CleanupMergedBranches.java"
 Branch main = repo.branch("main");
 
 for (Branch b : repo.mergedBranches(main)) {
     if (b.equals(main)) continue;
-    System.out.println("Lösche gemergten Branch: " + b.name());
+    System.out.println("Deleting merged branch: " + b.name());
     repo.deleteBranch(b);
 }
 ```
 
-### Rezept 3: Gezielte Code-Analyse vor einem Release
+### Recipe 3: Generate Release Notes Between Tags
 
 ```java title="ReleaseNotesGenerator.java"
 Commit lastRelease = repo.commit("v1.0.0");
@@ -104,7 +104,7 @@ List<CommitDiff> changes = repo.logWithDiff(
     DiffOptions.defaults().detectRenames()
 );
 
-System.out.println("## Änderungen seit " + lastRelease.shortId());
+System.out.println("## Changes since " + lastRelease.shortId());
 for (CommitDiff item : changes) {
     System.out.printf("- %s (%s) —%s%n",
         item.commit().subject(),
@@ -113,17 +113,17 @@ for (CommitDiff item : changes) {
 }
 ```
 
-### Rezept 4: Sichere Änderungserkennung für CI / Automationen
+### Recipe 4: Guard Against a Dirty Working Tree
 
 ```java title="CheckDirtyState.java"
 Status st = repo.status();
-boolean hasUncommitted = !st.staged().isEmpty()
+boolean dirty = !st.staged().isEmpty()
     || !st.unstaged().isEmpty()
     || !st.untracked().isEmpty()
     || !repo.conflictedFiles().isEmpty();
 
-if (hasUncommitted) {
-    System.out.println("Arbeitsverzeichnis ist nicht sauber:");
+if (dirty) {
+    System.out.println("Working tree is not clean:");
     System.out.println(repo.diff().formatStat());
 }
 ```
