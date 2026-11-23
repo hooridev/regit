@@ -1,0 +1,120 @@
+---
+title: Worktrees (Multi-Agent-Workflow)
+description: Isolierte Checkouts pro Aufgabe oder Agent mit eigenem Index, eigenem HEAD und parallelen Commits.
+---
+
+Verknüpfte Worktrees teilen sich denselben Objektspeicher (`.git/objects`) und dieselben Refs, besitzen aber jeweils einen **eigenen HEAD**, **eigenen Index** und **eigene Operation-Locks**. Dadurch können mehrere Threads oder KI-Agenten gleichzeitig auf unterschiedlichen Branches arbeiten und committen.
+
+## Worktrees anlegen (`git worktree add`)
+
+<Tabs items={['Neuer Branch (-b)', 'Bestehender Branch', 'Detached HEAD (--detach)', 'Force (--force)']}>
+  <Tab value="Neuer Branch (-b)">
+```java title="WorktreeNewBranch.java"
+// Neuen Branch direkt von HEAD oder einer beliebigen CommitRef im neuen Worktree auschecken
+Repository agent = mainRepo.addWorktreeNewBranch(
+    Path.of("/tmp/wt-docs"),
+    "agent/docs",
+    mainRepo.remoteBranch("origin", "main")
+);
+```
+  </Tab>
+  <Tab value="Bestehender Branch">
+```java title="WorktreeExistingBranch.java"
+Branch topic = mainRepo.createBranch("agent/refactor");
+Repository agent = mainRepo.addWorktree(Path.of("/tmp/wt-refactor"), topic);
+```
+  </Tab>
+  <Tab value="Detached HEAD (--detach)">
+```java title="WorktreeDetached.java"
+// Ideal für Read-only-Analysen, Builds oder Tests auf einem bestimmten Commit/Tag
+Commit release = mainRepo.commit("v1.0");
+Repository buildWt = mainRepo.addWorktreeDetached(Path.of("/tmp/wt-build"), release);
+```
+  </Tab>
+  <Tab value="Force (--force)">
+```java title="WorktreeForce.java"
+// Erlaubt das Auschecken eines Branches, der bereits in einem anderen Worktree aktiv ist
+Repository copy = mainRepo.addWorktree(
+    Path.of("/tmp/wt-main-copy"),
+    mainRepo.branch("main"),
+    WorktreeAddOptions.defaults().force()
+);
+```
+  </Tab>
+</Tabs>
+
+## Worktrees inspizieren (`git worktree list --porcelain`)
+
+```java title="ListWorktrees.java"
+for (WorktreeInfo wt : mainRepo.worktreeList()) {
+    String refLabel = wt.bare()
+        ? "(bare)"
+        : wt.detached()
+            ? "(detached)"
+            : wt.branch().map(Branch::name).orElse("(unborn)");
+
+    System.out.printf("%-35s %s %-20s%s%n",
+        wt.path(),
+        wt.head().map(id -> id.substring(0, 7)).orElse("-------"),
+        refLabel,
+        wt.locked() ? " [locked]" : "");
+}
+```
+
+## Worktrees entfernen (`git worktree remove`)
+
+```java title="RemoveWorktree.java"
+// Sicher entfernen: bricht ab, falls ungestagte/gestagte/ungetrackte Dateien existieren
+mainRepo.removeWorktree(agent);
+
+// Oder per Pfad
+mainRepo.removeWorktree(Path.of("/tmp/wt-docs"));
+
+// Erzwungen entfernen (`git worktree remove --force`): entfernt auch verschmutzte Worktrees
+mainRepo.removeWorktreeForce(agent);
+```
+
+## Parallele Multi-Agent-Ausführung mit Virtual Threads
+
+Da jeder Worktree seinen eigenen Index und eigene Locks hat, können zwei Agenten parallel committen und anschließend sauber in `main` integriert werden:
+
+```java title="ParallelAgents.java"
+import io.github.regit.*;
+import java.nio.file.*;
+import java.time.OffsetDateTime;
+import java.util.concurrent.Executors;
+
+var author = new Identity("Agent", "agent@example.org", OffsetDateTime.now());
+Repository mainRepo = Repository.open(Path.of("project"));
+
+Path dirA = Path.of("wt-agent-a");
+Path dirB = Path.of("wt-agent-b");
+Repository agentA = mainRepo.addWorktreeNewBranch(dirA, "agent/api");
+Repository agentB = mainRepo.addWorktreeNewBranch(dirB, "agent/docs");
+
+try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    var taskA = executor.submit(() -> {
+        Files.writeString(dirA.resolve("Api.java"), "public interface Api {}\n");
+        agentA.stageAll();
+        return agentA.commit("feat: add Api\n", author, author, CommitOptions.defaults());
+    });
+    var taskB = executor.submit(() -> {
+        Files.writeString(dirB.resolve("GUIDE.md"), "# Guide\n");
+        agentB.stageAll();
+        return agentB.commit("docs: add Guide\n", author, author, CommitOptions.defaults());
+    });
+
+    taskA.get();
+    taskB.get();
+}
+
+// Beide Worktrees direkt über ihr Repository-Handle in main mergen
+mainRepo.merge(agentA, author, "merge: agent/api\n");
+mainRepo.merge(agentB, author, "merge: agent/docs\n");
+
+// Aufräumen
+mainRepo.removeWorktree(agentA);
+mainRepo.removeWorktree(agentB);
+mainRepo.deleteBranch("agent/api");
+mainRepo.deleteBranch("agent/docs");
+```

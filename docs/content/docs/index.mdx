@@ -1,0 +1,113 @@
+---
+title: Einführung & Quickstart
+description: Abhängigkeitsfreie Java-25-Bibliothek für Git-Repositories mit typsicherer, objektorientierter API.
+---
+
+**regit** implementiert Git-Operationen direkt in **Java 25** — ohne externe Laufzeitabhängigkeiten, ohne JGit und ohne `git`-Subprozesse. Alle geschriebenen Objekte, Indizes, Refs, Worktrees und Konfliktzustände sind 100 % interoperabel mit nativem Git.
+
+<Callout type="info" title="Objektorientierte API statt String-Konkatenation">
+  Anstelle von CLI-Flags arbeitet `regit` mit typsicheren Domain-Objekten wie `Repository`, `Branch`, `RemoteBranch`, `Commit`, `CommitRef`, `Diff`, `Log`, `MergeOptions` und `RebaseOptions`.
+</Callout>
+
+## Installation
+
+<Tabs items={['Maven', 'Gradle (Kotlin DSL)']}>
+  <Tab value="Maven">
+```xml title="pom.xml"
+<dependency>
+  <groupId>io.github.trautmannp</groupId>
+  <artifactId>regit</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+  </Tab>
+  <Tab value="Gradle (Kotlin DSL)">
+```kotlin title="build.gradle.kts"
+dependencies {
+    implementation("io.github.trautmannp:regit:0.1.0-SNAPSHOT")
+}
+```
+  </Tab>
+</Tabs>
+
+## Quickstart in 30 Sekunden
+
+Der folgende Workflow initialisiert ein Repository, erstellt einen ersten Commit, isoliert Änderungen auf einem Feature-Branch in einem eigenen Worktree, prüft den Diff, merged zurück und räumt sauber auf:
+
+```java title="Quickstart.java"
+import io.github.regit.*;
+import java.nio.file.*;
+import java.time.OffsetDateTime;
+
+Path repoDir = Path.of("my-project");
+var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
+
+// 1. Repository initialisieren und ersten Commit erstellen
+Repository mainRepo = Repository.init(repoDir, "main");
+Files.writeString(repoDir.resolve("README.md"), "# My Project\n");
+mainRepo.stageAll();
+Commit initial = mainRepo.commit(mainRepo.commit("feat: initial commit\n", author, author));
+
+// 2. Isolierten Worktree für einen Task oder Agenten anlegen
+Path featureDir = Path.of("my-project-docs");
+Repository agent = mainRepo.addWorktreeNewBranch(featureDir, "agent/docs", initial);
+
+Files.writeString(featureDir.resolve("README.md"), "# My Project\n\nMit Dokumentation.\n");
+agent.stageAll();
+Commit docsCommit = agent.commit("docs: update README\n", author, author, CommitOptions.defaults());
+
+// 3. Diff zwischen Branch und Commit prüfen
+Diff diff = mainRepo.diff(initial, docsCommit);
+System.out.println(diff.formatStat());
+System.out.println(diff.formatPatch());
+
+// 4. Zurück in main mergen und Worktree sowie Branch aufräumen
+Branch docsBranch = mainRepo.branch("agent/docs");
+mainRepo.merge(docsBranch, author, "merge: integrate docs\n", MergeOptions.defaults().noFastForward());
+mainRepo.removeWorktree(agent);
+mainRepo.deleteBranch(docsBranch);
+```
+
+## Das `CommitRef`-Prinzip
+
+Viele Git-Operationen erwarten ein Ziel, das auf einen Commit zeigt. In `regit` implementieren die wichtigsten Typen das gemeinsame `sealed interface CommitRef`:
+
+- `Commit` — unveränderliches Commit-Objekt (z. B. aus `headCommit()`, `commit(...)`, `log(...)`)
+- `Branch` — lokaler Branch-Handle, folgt automatisch dem aktuellen Tip
+- `RemoteBranch` — Remote-Tracking-Branch (z. B. `origin/main`)
+- `CommitRef.of("HEAD~2")` — beliebige Git-Revisionsausdrücke (`v1.0`, `HEAD^2`, gekürzte SHAs)
+
+```java title="CommitRefExample.java"
+Branch main = repo.branch("main");
+RemoteBranch originMain = repo.remoteBranch("origin", "main");
+Commit release = repo.commit("v1.0");
+
+// Alle Kombinationen funktionieren direkt ohne String-Umwandlung
+boolean merged = repo.isAncestor(release, main);
+Optional<Commit> base = repo.mergeBase(originMain, main);
+Diff changes = repo.diff(originMain, main);
+String readme = repo.showText(release, Path.of("README.md"));
+```
+
+## Themenübersicht
+
+<Cards>
+  <Card title="Repositories & rev-parse" href="/docs/repositories">
+    Initialisieren, Öffnen, Pfade, Revisionen auflösen und Dateien aus Commits lesen (`rev:path`).
+  </Card>
+  <Card title="Status, Staging & Commits" href="/docs/staging-and-commits">
+    `status()`, `ignoredFiles()`, `stageAll` (`-A`), `stageUpdated` (`-u`), `stageIntentToAdd` (`-N`), `amend` & `fixup`.
+  </Card>
+  <Card title="Diffs & Code-Änderungen" href="/docs/diff">
+    Unified Patches, `--cached`, `--stat`, `--shortstat`, `--word-diff`, Rename-Erkennung (`-M`) und Filter.
+  </Card>
+  <Card title="Log, Suche & Merge-Base" href="/docs/log-and-history">
+    Fluente Log-Queries, Pickaxe (`-S`), Zeilenhistorie (`-L`), `--stat` und DAG-Abfragen.
+  </Card>
+  <Card title="Branches, Checkout & Worktrees" href="/docs/branches-and-checkout">
+    Branch-Verwaltung, Detached HEAD, Datei-Checkout und parallele Multi-Agent-Worktrees.
+  </Card>
+  <Card title="Merge, Rebase & Remotes" href="/docs/merge-and-rebase">
+    Merge-Modi, Rebase `--onto` / `--autosquash`, Konfliktauflösung, Fetch `--prune` und Smart-HTTP.
+  </Card>
+</Cards>

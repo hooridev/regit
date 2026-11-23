@@ -1,0 +1,126 @@
+---
+title: Repositories, rev-parse & show
+description: Repositories erstellen und öffnen, Revisionen auflösen sowie Blobs und Trees direkt aus der Historie lesen.
+---
+
+## Repository initialisieren oder öffnen
+
+```java title="OpenOrInit.java"
+import io.github.regit.Repository;
+import java.nio.file.Path;
+
+// Neues Arbeitsverzeichnis mit Initial-Branch "main"
+Repository repo = Repository.init(Path.of("/tmp/demo"), "main");
+
+// Neues Bare-Repository (z. B. als zentraler Server oder Remote)
+Repository bare = Repository.initBare(Path.of("/tmp/central.git"), "main");
+
+// Bestehendes Repository, verknüpften Worktree oder Bare-Repo öffnen
+Repository opened = Repository.open(Path.of("/tmp/demo"));
+boolean isBare = opened.isBare();
+```
+
+## Pfade & HEAD-Zustand (`git rev-parse`)
+
+Alle gängigen `rev-parse`-Abfragen stehen direkt als typsichere Methoden auf `Repository` zur Verfügung:
+
+```java title="RevParsePaths.java"
+// --show-toplevel (leer bei Bare-Repositories)
+Optional<Path> topLevel = repo.worktreeRoot();
+
+// --git-dir (Worktree-spezifisches Admin-Verzeichnis)
+Path gitDir = repo.gitDir();
+
+// --git-common-dir (geteiltes .git-Verzeichnis aller verknüpften Worktrees)
+Path commonDir = repo.commonDir();
+
+// --abbrev-ref HEAD ("main" oder "HEAD" bei Detached HEAD)
+String abbrev = repo.abbrevRef();
+boolean detached = repo.isDetachedHead();
+
+// Aktueller Branch als Optional (leer bei Detached HEAD, analog `git branch --show-current`)
+Optional<Branch> currentBranch = repo.currentBranchOptional();
+
+// Aktueller HEAD-Commit (funktioniert attached, detached und bei unborn Branch)
+Optional<String> headOid = repo.head();
+Optional<Commit> headCommit = repo.headCommit();
+```
+
+### Revisionen auflösen & eindeutig abkürzen
+
+`resolve(...)` versteht sämtliche Git-Revisionsausdrücke inklusive Tags (lightweight & annotated), `~`/`^`-Operatoren, Peel-Syntax (`^{tree}`, `^{commit}`), `<rev>:<path>` und `:<path>` (Index).
+
+```java title="ResolveRevisions.java"
+// Vollständige 40-stellige SHA-1 auflösen
+String headSha   = repo.resolve("HEAD");
+String treeSha   = repo.resolve("HEAD^{tree}");
+String parentSha = repo.resolve("HEAD~2");
+String blobSha   = repo.resolve("HEAD:src/main/App.java");
+String stagedSha = repo.resolve(":src/main/App.java");
+
+// Kollisionsfreie Abkürzung (analog `git rev-parse --short` bzw. `--short=10`)
+String short7  = repo.shortId("HEAD");
+String short10 = repo.shortId(repo.currentBranch(), 10);
+
+// Commit-Objekt direkt laden
+Commit head = repo.commit("HEAD");
+Commit tagCommit = repo.commit("v1.2.0");
+Commit branchTip = repo.commit(repo.branch("main"));
+
+System.out.printf("%s %s (%s)%n", head.shortId(), head.subject(), head.author().name());
+```
+
+## Dateien & Verzeichnisse aus Revisionen lesen (`git show rev:path`)
+
+Mit `showText(...)`, `showBlob(...)` und `listTree(...)` liest du historische Dateiversionen und Verzeichnisstrukturen direkt aus dem Git-Objektspeicher — auch in Bare-Repositories und ohne Checkout.
+
+<Tabs items={['Objektorientiert (Commit / Branch)', 'Git-Syntax (rev:path)']}>
+  <Tab value="Objektorientiert (Commit / Branch)">
+```java title="ShowWithObjects.java"
+Branch main = repo.branch("main");
+Commit previous = repo.commit("HEAD~1");
+
+// Textdatei (UTF-8) aus Branch oder Commit lesen
+String currentPom = repo.showText(main, "pom.xml");
+String oldReadme  = repo.showText(previous, Path.of("README.md"));
+
+// Binärdatei als byte[] lesen
+byte[] iconBytes = repo.showBlob(main, "assets/icon.svg");
+```
+  </Tab>
+  <Tab value="Git-Syntax (rev:path)">
+```java title="ShowWithRevPath.java"
+// Beliebige rev:path Ausdrücke
+String fromTag    = repo.showText("v1.0:README.md");
+String fromParent = repo.showText("HEAD~2:src/Main.java");
+
+// Gestagte Version aus dem Index lesen (:path)
+String stagedContent = repo.showText(":README.md");
+byte[] stagedBytes   = repo.showBlob(":assets/logo.png");
+```
+  </Tab>
+</Tabs>
+
+### Verzeichnisinhalte eines Commits auflisten (`git ls-tree`)
+
+```java title="ListTree.java"
+Commit head = repo.headCommit().orElseThrow();
+
+// Wurzelverzeichnis des Commits
+List<TreeEntry> rootEntries = repo.listTree(head);
+
+// Bestimmtes Unterverzeichnis (akzeptiert String oder Path)
+List<TreeEntry> srcEntries = repo.listTree(head, Path.of("src/main/java"));
+
+for (TreeEntry entry : srcEntries) {
+    System.out.printf("%-7s %s %s%s%n",
+        entry.type(),
+        entry.id().substring(0, 7),
+        entry.path(),
+        entry.executable() ? " (+x)" : "");
+}
+```
+
+<Callout type="idea" title="Commit-Diff anzeigen (`git show <rev>`)">
+  Um zusätzlich zu den Commit-Metadaten den Patch oder `--stat` eines Commits anzuzeigen, verwende `repo.showDiff(commit)` — siehe [Diffs & Code-Änderungen](/docs/diff#commit-diff-anzeigen-git-show).
+</Callout>

@@ -1,0 +1,131 @@
+---
+title: Diffs & Code-Änderungen
+description: Unified Patches, --cached, --stat, --shortstat, --name-only, --word-diff, Rename-Erkennung (-M) und Pfadfilter.
+---
+
+Die Diff-Engine von `regit` basiert auf dem **Myers-Algorithmus** (`O((N+M)D)`) und erzeugt Git-kompatible Unified-Hunks inkl. Sektions-Header, Binärdatei-Erkennung und `\ No newline at end of file`.
+
+## Die 4 häufigsten Diff-Vergleiche
+
+```java title="CommonDiffs.java"
+// 1. Ungestagte Änderungen: Working Tree vs. Index (`git diff`)
+Diff unstaged = repo.diff();
+
+// 2. Gestagte Änderungen: Index vs. HEAD (`git diff --cached`)
+Diff staged = repo.diffStaged();
+
+// 3. Working Tree gegen beliebigen Commit oder Branch (`git diff <rev>`)
+Diff vsHead = repo.diffWorktree(repo.currentBranch());
+Diff vsBase = repo.diffWorktree(repo.remoteBranch("origin", "main"));
+
+// 4. Zwei Commits / Branches direkt vergleichen (`git diff <from> <to>`)
+Branch main = repo.branch("main");
+Branch feature = repo.branch("feature/search");
+Diff branchDiff = repo.diff(main, feature);
+```
+
+## Ausgabeformate & Schnellprüfungen
+
+Jedes `Diff`-Objekt stellt sowohl strukturierte Daten als auch Git-kompatible Textformate bereit:
+
+```java title="DiffFormats.java"
+Diff diff = repo.diffStaged();
+
+// Schneller Leer-Check (`git diff --quiet`)
+if (diff.isEmpty()) {
+    System.out.println("Keine Änderungen.");
+    return;
+}
+
+// Nur geänderte Dateinamen (`git diff --name-only`)
+List<String> changedFiles = diff.names();
+
+// Kompakte Zusammenfassung (`git diff --shortstat`)
+// z. B. " 2 files changed, 14 insertions(+), 3 deletions(-)"
+String shortStat = diff.formatShortStat();
+
+// Strukturierte Statistik
+DiffStat stat = diff.stat();
+System.out.printf("%d Dateien, +%d / -%d%n",
+    stat.filesChanged(), stat.insertions(), stat.deletions());
+
+// Diffstat-Tabelle (`git diff --stat`)
+System.out.println(diff.formatStat());
+
+// Vollständiger Unified Patch (`git diff`)
+System.out.println(diff.formatPatch());
+
+// Inline Word-Diff (`git diff --word-diff`, Format: [-alt-]{+neu+})
+System.out.println(diff.formatWordDiff());
+```
+
+## Optionen: `-U<n>`, `--diff-filter`, `-M` & Pfadfilter
+
+Mit `DiffOptions` konfigurierst du Kontextzeilen, Änderungsfilter, Rename-Erkennung und Pfade fluent und unveränderlich:
+
+```java title="DiffOptionsExample.java"
+DiffOptions options = DiffOptions.defaults()
+    .contextLines(1)                                       // -U1
+    .detectRenames()                                       // -M (Standard: 50% Ähnlichkeit)
+    .filter(FileDiff.Change.MODIFIED, FileDiff.Change.RENAMED) // --diff-filter=MR
+    .paths(Path.of("src/main"));                           // -- src/main
+
+Diff filtered = repo.diff(repo.commit("HEAD~5"), repo.headCommit().orElseThrow(), options);
+
+for (FileDiff file : filtered.files()) {
+    if (file.change() == FileDiff.Change.RENAMED) {
+        System.out.printf("Renamed %s -> %s (%d%%)%n",
+            file.oldPath(), file.newPath(), file.similarity());
+    }
+    for (DiffHunk hunk : file.hunks()) {
+        System.out.println(hunk.header());
+        for (DiffLine line : hunk.lines()) {
+            System.out.print(line.prefix() + line.content());
+        }
+    }
+}
+```
+
+### Typische `DiffOptions`-Rezepte
+
+<Tabs items={['Nur hinzugefügte Dateien', 'Strengere Rename-Schwelle', 'Nur bestimmte Dateien']}>
+  <Tab value="Nur hinzugefügte Dateien">
+```java title="AddedOnly.java"
+Diff added = repo.diffStaged(
+    DiffOptions.defaults().filter(FileDiff.Change.ADDED)
+);
+List<String> newFiles = added.names();
+```
+  </Tab>
+  <Tab value="Strengere Rename-Schwelle">
+```java title="StrictRenames.java"
+// -M80% (mindestens 80 % Ähnlichkeit)
+Diff diff = repo.diff("HEAD~1", "HEAD",
+    DiffOptions.defaults().detectRenames(80)
+);
+```
+  </Tab>
+  <Tab value="Nur bestimmte Dateien">
+```java title="PathScopedDiff.java"
+// Keine Kontextzeilen (-U0) für präzise Maschinenauswertung
+Diff patch = repo.diff(
+    DiffOptions.defaults()
+        .contextLines(0)
+        .paths("pom.xml", "src/main/java")
+);
+```
+  </Tab>
+</Tabs>
+
+## Commit-Diff anzeigen (`git show`)
+
+`showDiff(...)` vergleicht einen Commit mit seinem ersten Parent (oder mit dem leeren Tree beim Root-Commit):
+
+```java title="ShowCommitDiff.java"
+Commit head = repo.headCommit().orElseThrow();
+CommitDiff shown = repo.showDiff(head, DiffOptions.defaults().detectRenames());
+
+System.out.println(shown.commit().shortId() + " " + shown.commit().subject());
+System.out.println(shown.diff().formatStat());
+System.out.println(shown.diff().formatPatch());
+```

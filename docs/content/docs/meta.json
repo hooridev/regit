@@ -1,0 +1,20 @@
+{
+  "title": "Dokumentation",
+  "pages": [
+    "index",
+    "---Grundlagen---",
+    "repositories",
+    "staging-and-commits",
+    "---Historie & Analyse---",
+    "diff",
+    "log-and-history",
+    "---Branches & Parallelität---",
+    "branches-and-checkout",
+    "worktrees",
+    "---Integration & Konflikte---",
+    "merge-and-rebase",
+    "---Synchronisation & Erweiterung---",
+    "remotes-and-hosting",
+    "extensions-and-recipes"
+  ]
+}

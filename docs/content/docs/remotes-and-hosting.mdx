@@ -1,0 +1,115 @@
+---
+title: Remotes, Fetch, Push & HTTP-Hosting
+description: Benannte Remotes, fetch --prune, push -u / -f / --force-with-lease / --delete, Smart HTTP und Bare-Repo-Hosting.
+---
+
+## Remotes konfigurieren
+
+`Remote`-Handles lesen und schreiben die regulären `[remote "<name>"]`-Sektionen in `.git/config` und funktionieren sowohl mit lokalen Dateisystem-Pfaden als auch mit HTTP(S)-URLs.
+
+```java title="ConfigureRemotes.java"
+// Lokales Bare-Repo oder Smart-HTTP-Endpoint als Remote registrieren
+Remote origin = repo.addRemote("origin", "https://git.example.org/team/app.git");
+Remote backup = repo.addRemote("backup", Path.of("/srv/git/app.git"));
+
+// Alle Remotes auflisten oder per Name laden
+List<Remote> remotes = repo.remotes();
+Remote loaded = repo.remote("origin");
+
+// Remote entfernen
+repo.removeRemote(backup);
+```
+
+## Fetch & Prune (`git fetch --prune`)
+
+`fetch(...)` aktualisiert alle Remote-Tracking-Branches unter `refs/remotes/<remote>/*` ohne den aktuellen Branch zu verändern:
+
+```java title="FetchAndPrune.java"
+Remote origin = repo.remote("origin");
+
+// Alle Remote-Branches holen und veraltete Tracking-Refs entfernen (`git fetch origin --prune`)
+FetchResult fetched = repo.fetch(origin, FetchOptions.defaults().prune());
+
+fetched.updated().forEach((rb, oid) ->
+    System.out.println("updated " + rb.fullName() + " -> " + oid.substring(0, 7)));
+fetched.pruned().forEach(rb ->
+    System.out.println("pruned  " + rb.fullName()));
+
+// Gefetchte RemoteBranch direkt weiterverwenden
+RemoteBranch originMain = repo.remoteBranch("origin", "main");
+Diff behind = repo.diff(repo.currentBranch(), originMain);
+```
+
+## Push-Modi (`-u`, `-f`, `--force-with-lease`, `--delete`)
+
+```java title="PushModes.java"
+Remote origin = repo.remote("origin");
+Branch current = repo.currentBranch();
+
+// 1. Standard Fast-Forward Push
+repo.push(origin);
+
+// 2. Push mit Upstream-Tracking (`git push -u origin <branch>`)
+repo.push(origin, PushOptions.defaults().setUpstream());
+
+// 3. Sicherer Force-Push gegen lokalen Tracking-Stand (`git push --force-with-lease`)
+repo.push(origin, PushOptions.defaults().forceWithLease());
+
+// 4. Force-Push gegen explizit erwarteten Remote-Commit
+Commit expected = repo.commit("origin/main");
+repo.push(origin, current, "main", PushOptions.defaults().forceWithLease(expected));
+
+// 5. Unbedingter Force-Push (`git push -f`)
+repo.push(origin, PushOptions.defaults().force());
+
+// 6. Remote-Branch löschen (`git push origin --delete feat/old`)
+repo.deleteRemoteBranch(origin, "feat/old");
+// Oder direkt über das RemoteBranch-Objekt:
+repo.deleteRemoteBranch(repo.remoteBranch("origin", "feat/old"));
+```
+
+## Smart HTTP mit eigenem `HttpClient` (Auth & TLS)
+
+Du behältst die volle Kontrolle über Authentifizierung, Proxys, Timeouts und TLS über den Standard-`java.net.http.HttpClient`:
+
+```java title="SmartHttpAuth.java"
+import java.net.*;
+import java.net.http.HttpClient;
+import java.time.Duration;
+
+HttpClient client = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofSeconds(10))
+    .authenticator(new Authenticator() {
+        @Override
+        protected PasswordAuthentication getPasswordAuthentication() {
+            return new PasswordAuthentication("git-bot", System.getenv("GIT_TOKEN").toCharArray());
+        }
+    })
+    .build();
+
+Remote origin = repo.remote("origin");
+repo.fetch(origin, FetchOptions.defaults().prune().httpClient(client));
+repo.push(origin, PushOptions.defaults().setUpstream().httpClient(client));
+```
+
+## Eigenes Bare-Repository über Smart HTTP hosten
+
+Mit `httpHandler(...)` kannst du ein Bare-Repository direkt im eingebetteten JDK-`HttpServer` bereitstellen — vollständig kompatibel mit `git clone`, `git fetch` und `git push`:
+
+```java title="HostBareRepo.java"
+import com.sun.net.httpserver.HttpServer;
+import io.github.regit.*;
+import java.net.InetSocketAddress;
+import java.nio.file.Path;
+
+Repository central = Repository.initBare(Path.of("/srv/repos/team.git"), "main");
+
+HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 8080), 0);
+server.createContext("/team.git", central.httpHandler(GitHttpHandler.Access.READ_WRITE));
+server.createContext("/mirror.git", central.httpHandler(GitHttpHandler.Access.READ_ONLY));
+server.start();
+```
+
+<Callout type="warn" title="Sicherheit beim Hosting">
+  `GitHttpHandler` übernimmt das Git Smart-HTTP-v0-Protokoll inkl. Pack-Validierung, Ref-Locking und Größenlimits (256 MiB Body / 100.000 Pack-Records). Authentifizierung und TLS solltest du über einen Reverse Proxy oder einen JDK-HTTP-Filter vorschalten.
+</Callout>

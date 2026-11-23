@@ -1,0 +1,115 @@
+---
+title: Branches, Checkout & Detached HEAD
+description: Branches anlegen, verschieben, umbenennen, filtern, wechseln, Detached HEAD nutzen und Dateien aus Commits wiederherstellen.
+---
+
+## Branches verwalten (`git branch`)
+
+Ein `Branch`-Objekt ist an sein Repository gebunden und folgt automatisch dem aktuellen Tip — auch wenn ein anderer Worktree den Branch weiterbewegt.
+
+```java title="ManageBranches.java"
+// Aktueller Branch (`--show-current`, leer bei Detached HEAD)
+Optional<Branch> current = repo.currentBranchOptional();
+
+// Neuen Branch auf HEAD anlegen
+Branch feat = repo.createBranch("feat/search");
+
+// Neuen Branch ab beliebiger CommitRef anlegen (Commit, Branch, RemoteBranch)
+Commit base = repo.commit("HEAD~2");
+Branch hotfix = repo.createBranch("hotfix/null-check", base);
+
+// Bestehenden (nicht ausgecheckten) Branch verschieben (`git branch -f`)
+repo.forceCreateBranch("hotfix/null-check", repo.remoteBranch("origin", "main"));
+
+// Branch umbenennen (`git branch -m`) — aktualisiert HEADs und Upstream-Config
+Branch renamed = repo.renameBranch(feat, "feat/fulltext-search");
+
+// Sicher löschen: nur wenn in HEAD gemerged (`git branch -d`)
+repo.deleteBranch(hotfix);
+
+// Erzwungen löschen: auch bei ungemergten Commits (`git branch -D`)
+repo.forceDeleteBranch(renamed);
+```
+
+### Branches auflisten & filtern (`-a`, `-r`, `-vv`, `--merged`, `--contains`)
+
+```java title="QueryBranches.java"
+// Lokale Branches, Remote-Branches (-r) und alle zusammen (-a)
+List<Branch> locals = repo.localBranches();
+List<RemoteBranch> remotes = repo.remoteBranches();
+List<CommitRef> all = repo.allBranches();
+
+// Ausführliche Branch-Infos (`git branch -vv`)
+for (BranchInfo info : repo.branchInfos()) {
+    String marker = info.current() ? "*" : " ";
+    String track = info.tracking()
+        .map(t -> " [" + t.upstream().fullName()
+            + (t.formatShort().isEmpty() ? "" : " " + t.formatShort().substring(1)))
+        .orElse("");
+    System.out.printf("%s %-20s %s%s %s%n",
+        marker,
+        info.branch().name(),
+        info.tip().shortId(),
+        track,
+        info.tip().subject());
+}
+
+// Welche Branches sind bereits in main gemerged / noch offen?
+Branch main = repo.branch("main");
+List<Branch> merged = repo.mergedBranches(main);       // --merged main
+List<Branch> unmerged = repo.unmergedBranches(main);   // --no-merged main
+
+// Welche Branches enthalten einen bestimmten Commit?
+Commit bugfix = repo.commit("HEAD~3");
+List<Branch> withFix = repo.branchesContaining(bugfix); // --contains <commit>
+```
+
+## Branches wechseln & Checkout (`git checkout`)
+
+```java title="CheckoutOperations.java"
+// Zu bestehendem lokalen Branch wechseln
+Branch main = repo.branch("main");
+repo.switchBranch(main);
+
+// Neuen Branch erstellen und direkt auschecken (`git checkout -b`)
+Branch topic = repo.checkoutNewBranch("feat/cache");
+Branch fromRemote = repo.checkoutNewBranch("review/pr-42", repo.remoteBranch("origin", "main"));
+
+// Branch erstellen oder bestehenden auf Ziel zurücksetzen und auschecken (`git checkout -B`)
+repo.checkoutResetBranch("feat/cache", main);
+```
+
+### Detached HEAD (`git checkout --detach`)
+
+`regit` unterstützt Detached HEAD als vollwertigen Zustand — inklusive `status()`, `stage()`, `commit()` und `switchBranch()`:
+
+```java title="DetachedHead.java"
+Commit snapshot = repo.commit("v1.0");
+
+// In Detached HEAD wechseln
+Commit checkedOut = repo.checkoutDetached(snapshot);
+assert repo.isDetachedHead();
+assert repo.currentBranchOptional().isEmpty();
+assert repo.abbrevRef().equals("HEAD");
+
+// Experimentellen Commit im Detached HEAD erzeugen
+Files.writeString(repo.worktreeRoot().orElseThrow().resolve("experiment.txt"), "test\n");
+repo.stage("experiment.txt");
+Commit experiment = repo.commit("wip: experiment\n", author, author, CommitOptions.defaults());
+
+// Bei Bedarf direkt als neuen Branch sichern
+Branch saved = repo.checkoutNewBranch("feat/experiment", experiment);
+```
+
+### Einzelne Dateien aus einem Commit wiederherstellen (`git checkout <rev> -- <paths>`)
+
+```java title="CheckoutFiles.java"
+Commit previous = repo.commit("HEAD~1");
+
+// Schreibt die Dateiversion aus previous in Arbeitsverzeichnis UND Index
+repo.checkoutFiles(previous, Path.of("pom.xml"), Path.of("src/main/Config.java"));
+```
+
+<Callout type="info" title="Konfliktseiten auschecken (`--ours` / `--theirs`)">
+  Während eines Merge- oder Rebase-Konflikts stehen zusätzlich `repo.checkoutOurs(...)` und `repo.checkoutTheirs(...)` zur Verfügung — siehe [Merge, Rebase & Konfliktauflösung](/docs/merge-and-rebase#konflikte-mit---ours--theirs-auflösen).
+</Callout>
