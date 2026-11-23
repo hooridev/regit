@@ -35,7 +35,7 @@ public final class Log {
             List.of(), List.of(), false, false, false,
             null, 0, Order.DEFAULT, false, false,
             0, Integer.MAX_VALUE, List.of(), List.of(), List.of(),
-            null, null, List.of());
+            null, null, List.of(), null);
 
     private final List<Target> includes;
     private final List<Target> excludes;
@@ -55,11 +55,12 @@ public final class Log {
     private final Instant since;
     private final Instant until;
     private final List<PathSpec> paths;
+    private final String pickaxe;
 
     private Log(List<Target> includes, List<Target> excludes, boolean all, boolean branches, boolean tags,
                 Integer maxCount, int skip, Order order, boolean reverse, boolean firstParent,
                 int minParents, int maxParents, List<Pattern> authors, List<Pattern> committers, List<Pattern> greps,
-                Instant since, Instant until, List<PathSpec> paths) {
+                Instant since, Instant until, List<PathSpec> paths, String pickaxe) {
         this.includes = List.copyOf(includes);
         this.excludes = List.copyOf(excludes);
         this.all = all;
@@ -78,6 +79,7 @@ public final class Log {
         this.since = since;
         this.until = until;
         this.paths = List.copyOf(paths);
+        this.pickaxe = pickaxe;
     }
 
     /** Default query starting from {@code HEAD}. */
@@ -156,9 +158,9 @@ public final class Log {
     }
 
     private static Log symmetric(Target left, Target right) {
-        return with(List.of(new Target.Symmetric(left, right)),
+        return new Log(List.of(new Target.Symmetric(left, right)),
                 List.of(), false, false, false, null, 0, Order.DEFAULT, false, false,
-                0, Integer.MAX_VALUE, List.of(), List.of(), List.of(), null, null, List.of());
+                0, Integer.MAX_VALUE, List.of(), List.of(), List.of(), null, null, List.of(), null);
     }
 
     public Log include(String... revisions) {
@@ -341,12 +343,22 @@ public final class Log {
                 minParents, maxParents, authors, committers, greps, since, until, next);
     }
 
-    private static Log with(List<Target> includes, List<Target> excludes, boolean all, boolean branches, boolean tags,
-                            Integer maxCount, int skip, Order order, boolean reverse, boolean firstParent,
-                            int minParents, int maxParents, List<Pattern> authors, List<Pattern> committers,
-                            List<Pattern> greps, Instant since, Instant until, List<PathSpec> paths) {
+    /**
+     * Filter to commits that change the number of occurrences of {@code text} in a file ({@code git log -S<text>}).
+     */
+    public Log pickaxe(String text) {
+        Objects.requireNonNull(text, "text");
+        if (text.isEmpty()) throw new IllegalArgumentException("Pickaxe search string must not be empty");
         return new Log(includes, excludes, all, branches, tags, maxCount, skip, order, reverse, firstParent,
-                minParents, maxParents, authors, committers, greps, since, until, paths);
+                minParents, maxParents, authors, committers, greps, since, until, paths, text);
+    }
+
+    private Log with(List<Target> includes, List<Target> excludes, boolean all, boolean branches, boolean tags,
+                     Integer maxCount, int skip, Order order, boolean reverse, boolean firstParent,
+                     int minParents, int maxParents, List<Pattern> authors, List<Pattern> committers,
+                     List<Pattern> greps, Instant since, Instant until, List<PathSpec> paths) {
+        return new Log(includes, excludes, all, branches, tags, maxCount, skip, order, reverse, firstParent,
+                minParents, maxParents, authors, committers, greps, since, until, paths, pickaxe);
     }
 
     List<Target> includes() { return includes; }
@@ -367,4 +379,5 @@ public final class Log {
     Instant since() { return since; }
     Instant until() { return until; }
     List<PathSpec> paths() { return paths; }
+    String pickaxeTerm() { return pickaxe; }
 }

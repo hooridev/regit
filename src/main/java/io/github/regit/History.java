@@ -133,7 +133,7 @@ final class History {
             }
             if (!outcome.shown()) continue;
             Commit commit = rev.toCommit(id);
-            if (!matches(commit, query)) continue;
+            if (!matches(commit, query, paths)) continue;
             if (skipped < query.skipCount()) {
                 skipped++;
                 continue;
@@ -217,7 +217,7 @@ final class History {
         for (String id : ordered) {
             if (!shownSet.contains(id)) continue;
             Commit commit = read(id).toCommit(id);
-            if (!matches(commit, query)) continue;
+            if (!matches(commit, query, paths)) continue;
             if (skipped < query.skipCount()) {
                 skipped++;
                 continue;
@@ -407,7 +407,7 @@ final class History {
         return normalized;
     }
 
-    private static boolean matches(Commit commit, Log query) {
+    private boolean matches(Commit commit, Log query, List<String> paths) throws IOException {
         int parentCount = commit.parents().size();
         if (parentCount < query.minParents() || parentCount > query.maxParents()) return false;
         Instant commitTime = commit.committer().when().toInstant();
@@ -416,7 +416,42 @@ final class History {
         if (!matchesAny(query.authors(), commit.author().formatted())) return false;
         if (!matchesAny(query.committers(), commit.committer().formatted())) return false;
         if (!matchesAny(query.greps(), commit.message())) return false;
+        if (query.pickaxeTerm() != null && !matchesPickaxe(commit, query.pickaxeTerm(), paths)) return false;
         return true;
+    }
+
+    private boolean matchesPickaxe(Commit commit, String needle, List<String> pathFilters) throws IOException {
+        List<String> parents = commit.parents();
+        if (parents.size() > 1) return false; // Matches Git's default `git log -S` (skips merge commits unless -m)
+        var treeHelper = new Trees(db);
+        Map<String, Entry> current = treeHelper.flatten(commit.tree());
+        Map<String, Entry> parent = parents.isEmpty()
+                ? Map.of() : treeHelper.flatten(read(parents.getFirst()).tree());
+        var all = new HashSet<String>(current.keySet());
+        all.addAll(parent.keySet());
+        for (String path : all) {
+            if (!matchesPathFilter(path, pathFilters)) continue;
+            Entry oldEntry = parent.get(path);
+            Entry newEntry = current.get(path);
+            if (oldEntry != null && newEntry != null && oldEntry.hash().equals(newEntry.hash())) continue;
+            int oldCount = oldEntry == null ? 0 : countInBlob(oldEntry.hash(), needle);
+            int newCount = newEntry == null ? 0 : countInBlob(newEntry.hash(), needle);
+            if (oldCount != newCount) return true;
+        }
+        return false;
+    }
+
+    private int countInBlob(String hash, String needle) throws IOException {
+        byte[] data = db.read(hash, "blob");
+        return DiffEngine.countOccurrences(new String(data, java.nio.charset.StandardCharsets.UTF_8), needle);
+    }
+
+    private static boolean matchesPathFilter(String path, List<String> filters) {
+        if (filters.isEmpty()) return true;
+        for (String filter : filters) {
+            if (filter.isEmpty() || path.equals(filter) || path.startsWith(filter + "/")) return true;
+        }
+        return false;
     }
 
     private static boolean matchesAny(List<Pattern> patterns, String text) {

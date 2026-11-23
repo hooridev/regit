@@ -257,6 +257,105 @@ public final class Repository {
         return new History(db).walk(Objects.requireNonNull(query), layout);
     }
 
+    /** Execute a {@link Log} query and attach each commit's {@link Diff} ({@code git log --stat} / {@code -p}). */
+    public List<CommitDiff> logWithDiff(Log query) throws IOException {
+        return logWithDiff(query, DiffOptions.defaults());
+    }
+
+    /** Execute a {@link Log} query with custom {@link DiffOptions} for each commit's diff. */
+    public List<CommitDiff> logWithDiff(Log query, DiffOptions options) throws IOException {
+        List<Commit> commits = log(query);
+        var engine = new DiffEngine(layout, db);
+        var result = new ArrayList<CommitDiff>(commits.size());
+        for (Commit c : commits) result.add(new CommitDiff(c, engine.diffCommitAgainstParent(c, options)));
+        return Collections.unmodifiableList(result);
+    }
+
+    /** Trace the evolution of lines {@code [startLine..endLine]} (1-based, inclusive) in {@code path} ({@code git log -L}). */
+    public List<LineLogEntry> logLines(String path, int startLine, int endLine) throws IOException {
+        return logLines(CommitRef.of("HEAD"), path, startLine, endLine);
+    }
+
+    /** Trace line-range evolution from {@code HEAD} for a {@link Path} ({@code git log -L}). */
+    public List<LineLogEntry> logLines(Path path, int startLine, int endLine) throws IOException {
+        return logLines(CommitRef.of("HEAD"), layout.repoPath(path), startLine, endLine);
+    }
+
+    /** Trace line-range evolution starting from {@code from} ({@code git log -L start,end:path <from>}). */
+    public List<LineLogEntry> logLines(CommitRef from, String path, int startLine, int endLine) throws IOException {
+        String id = new Revisions(layout, db).resolveCommit(from);
+        String normalized = Layout.normalizeRelativePath(path, false);
+        return new DiffEngine(layout, db).logLines(id, normalized, startLine, endLine);
+    }
+
+    /** Trace line-range evolution starting from {@code from} for a {@link Path}. */
+    public List<LineLogEntry> logLines(CommitRef from, Path path, int startLine, int endLine) throws IOException {
+        return logLines(from, layout.repoPath(path), startLine, endLine);
+    }
+
+    /** Diff the working tree against the index ({@code git diff}). */
+    public Diff diff() throws IOException { return diff(DiffOptions.defaults()); }
+
+    /** Diff the working tree against the index with options. */
+    public Diff diff(DiffOptions options) throws IOException {
+        return new DiffEngine(layout, db).diffWorktreeToIndex(options);
+    }
+
+    /** Diff staged changes in the index against {@code HEAD} ({@code git diff --cached}). */
+    public Diff diffStaged() throws IOException { return diffStaged(DiffOptions.defaults()); }
+
+    /** Diff staged changes in the index against {@code HEAD} with options. */
+    public Diff diffStaged(DiffOptions options) throws IOException {
+        return new DiffEngine(layout, db).diffIndexToHead(options);
+    }
+
+    /** Diff the working tree against {@code base} ({@code git diff <rev>}). */
+    public Diff diffWorktree(CommitRef base) throws IOException { return diffWorktree(base, DiffOptions.defaults()); }
+
+    /** Diff the working tree against {@code base} with options. */
+    public Diff diffWorktree(CommitRef base, DiffOptions options) throws IOException {
+        return new DiffEngine(layout, db).diffWorktreeToCommit(resolve(base), options);
+    }
+
+    /** Diff the working tree against a revision string ({@code git diff <rev>}). */
+    public Diff diffWorktree(String base) throws IOException { return diffWorktree(CommitRef.of(base)); }
+
+    /** Diff two commits ({@code git diff <from> <to>}). */
+    public Diff diff(CommitRef from, CommitRef to) throws IOException {
+        return diff(from, to, DiffOptions.defaults());
+    }
+
+    /** Diff two commits with options. */
+    public Diff diff(CommitRef from, CommitRef to, DiffOptions options) throws IOException {
+        return new DiffEngine(layout, db).diffCommits(resolve(from), resolve(to), options);
+    }
+
+    /** Diff two revisions by string ({@code git diff <from> <to>}). */
+    public Diff diff(String from, String to) throws IOException {
+        return diff(CommitRef.of(from), CommitRef.of(to), DiffOptions.defaults());
+    }
+
+    /** Diff two revisions by string with options. */
+    public Diff diff(String from, String to, DiffOptions options) throws IOException {
+        return diff(CommitRef.of(from), CommitRef.of(to), options);
+    }
+
+    /** Show a commit's diff against its first parent ({@code git show <rev>} / {@code git show --stat}). */
+    public CommitDiff showDiff(CommitRef target) throws IOException {
+        return showDiff(target, DiffOptions.defaults());
+    }
+
+    /** Show a commit's diff against its first parent with options. */
+    public CommitDiff showDiff(CommitRef target, DiffOptions options) throws IOException {
+        Commit c = commit(target);
+        return new CommitDiff(c, new DiffEngine(layout, db).diffCommitAgainstParent(c, options));
+    }
+
+    /** Show a commit's diff against its first parent by revision string. */
+    public CommitDiff showDiff(String revision) throws IOException {
+        return showDiff(CommitRef.of(revision), DiffOptions.defaults());
+    }
+
     @FunctionalInterface private interface Action<T> { T run() throws IOException; }
     private <T> T change(Lifecycle.Operation operation, String target, Action<T> action) throws IOException {
         Path location = layout.root() == null ? layout.common() : layout.root();
