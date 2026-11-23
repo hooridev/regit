@@ -33,7 +33,7 @@ class RemoteFetchPushTest {
 
         writeFile(workA, "f.txt", "v1\n");
         repoA.stage("f.txt");
-        Commit c1 = repoA.commit(repoA.commit("c1\n", WHO, WHO));
+        Commit c1 = repoA.commit("c1\n", WHO, WHO);
 
         // Push -u sets upstream config + updates refs/remotes/origin/main
         assertEquals(c1.id(), repoA.push(originA, PushOptions.defaults().setUpstream()));
@@ -46,7 +46,7 @@ class RemoteFetchPushTest {
         repoA.switchBranch(topicA);
         writeFile(workA, "t.txt", "topic\n");
         repoA.stage("t.txt");
-        Commit t1 = repoA.commit(repoA.commit("t1\n", WHO, WHO));
+        Commit t1 = repoA.commit("t1\n", WHO, WHO);
         repoA.push(originA, topicA, "topic", PushOptions.defaults().setUpstream());
         repoA.switchBranch("main");
 
@@ -72,7 +72,7 @@ class RemoteFetchPushTest {
         // Tracking ahead/behind counts match git status -sb
         writeFile(workA, "f.txt", "v2\n");
         repoA.stage("f.txt");
-        Commit c2 = repoA.commit(repoA.commit("c2\n", WHO, WHO));
+        Commit c2 = repoA.commit("c2\n", WHO, WHO);
         BranchTracking ahead1 = repoA.branchTracking().orElseThrow();
         assertEquals("origin/main", ahead1.upstream().fullName());
         assertEquals(1, ahead1.ahead());
@@ -180,14 +180,14 @@ class RemoteFetchPushTest {
 
             writeFile(workA, "hello.txt", "v1\n");
             repoA.stage("hello.txt");
-            Commit c1 = repoA.commit(repoA.commit("c1\n", WHO, WHO));
+            Commit c1 = repoA.commit("c1\n", WHO, WHO);
             repoA.push(originA, PushOptions.defaults().setUpstream().httpClient(httpClient));
 
             Branch feature = repoA.createBranch("feature");
             repoA.switchBranch(feature);
             writeFile(workA, "feat.txt", "feat\n");
             repoA.stage("feat.txt");
-            Commit f1 = repoA.commit(repoA.commit("f1\n", WHO, WHO));
+            Commit f1 = repoA.commit("f1\n", WHO, WHO);
             repoA.push(originA, feature, "feature", PushOptions.defaults().httpClient(httpClient));
 
             // Second repo fetches via smart HTTP

@@ -41,7 +41,7 @@ class InteropTest {
         Files.createDirectories(file.getParent());
         Files.writeString(file, content);
         repo.stage(name);
-        return repo.commit(message + "\n", WHO, WHO);
+        return repo.commit(message + "\n", WHO, WHO).id();
     }
     @Test void statusSeparatesIndexAndWorktreeIncludingUnbornHead() throws Exception {
         Files.writeString(root.resolve("both"), "staged");
@@ -80,7 +80,7 @@ class InteropTest {
             repo.stage(path);
         }
         String expected = git(root, "write-tree");
-        String oid = repo.commit("snapshot\n", WHO, WHO);
+        String oid = repo.commit("snapshot\n", WHO, WHO).id();
         assertEquals(expected, git(root, "rev-parse", "HEAD^{tree}"));
         assertEquals(git(root, "commit-tree", expected, "-m", "snapshot"), oid);
         assertEquals("", git(root, "status", "--porcelain"));
@@ -103,7 +103,7 @@ class InteropTest {
         assertEquals(topic, agent.currentBranch());
         Files.writeString(checkout.resolve("base"), "edited");
         agent.stage("base");
-        String tip = agent.commit("edit\n", WHO, WHO);
+        String tip = agent.commit("edit\n", WHO, WHO).id();
         assertEquals(tip, agent.rebase(main, WHO));
         Branch other = repo.createBranch("other");
         agent.switchBranch(other);
@@ -127,7 +127,7 @@ class InteropTest {
         Files.writeString(location.resolve("base"), "updated");
         assertThrows(IOException.class, () -> repo.removeWorktree(agent));
         agent.stage("base");
-        String tip = agent.commit("change\n", WHO, WHO);
+        String tip = agent.commit("change\n", WHO, WHO).id();
         assertEquals(tip, repo.merge(agent, WHO, "merge\n"));
 
         Repository foreign = Repository.init(tmp.resolve("foreign"), "next");
@@ -152,7 +152,7 @@ class InteropTest {
         topic.stage("base");
         assertEquals("", git(root, "status", "--porcelain"));
         assertEquals("M  base", git(child, "status", "--porcelain"));
-        String tip = topic.commit("topic\n", WHO, WHO);
+        String tip = topic.commit("topic\n", WHO, WHO).id();
         assertEquals(base, repo.head().orElseThrow());
         assertEquals(tip, repo.merge("agent/task", WHO, "merge\n"));
         assertEquals("changed", Files.readString(root.resolve("base")));
@@ -328,8 +328,8 @@ class InteropTest {
             }
         };
         try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
-            var a = executor.submit(() -> repo.withLifecycle(hook).commit("main\n", WHO, WHO));
-            var b = executor.submit(() -> other.withLifecycle(hook).commit("second\n", WHO, WHO));
+            var a = executor.submit(() -> repo.withLifecycle(hook).commit("main\n", WHO, WHO).id());
+            var b = executor.submit(() -> other.withLifecycle(hook).commit("second\n", WHO, WHO).id());
             assertEquals(a.get(), git(root, "rev-parse", "main"));
             assertEquals(b.get(), git(root, "rev-parse", "second"));
         }

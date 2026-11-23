@@ -55,8 +55,7 @@ if (result.isConflicted()) {
     repo.stage("config/app.properties", "docs/README.md");
 
     // Conclude the 2-parent merge commit
-    Commit merged = repo.commit("merge: resolved conflicts\n", committer, committer,
-        CommitOptions.defaults());
+    Commit merged = repo.commit("merge: resolved conflicts\n", committer, committer);
 }
 ```
 

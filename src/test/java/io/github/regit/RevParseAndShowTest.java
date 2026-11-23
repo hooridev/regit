@@ -30,10 +30,10 @@ class RevParseAndShowTest {
 
         writeFile(root, "README.md", "hello\n");
         repo.stage("README.md");
-        String c1 = repo.commit("first\n", WHO, WHO);
+        String c1 = repo.commit("first\n", WHO, WHO).id();
         writeFile(root, "src/App.java", "class App {}\n");
         repo.stage("src/App.java");
-        String c2 = repo.commit("second\n", WHO, WHO);
+        String c2 = repo.commit("second\n", WHO, WHO).id();
         git(root, "tag", "-a", "v1", "-m", "release 1");
 
         // Compare rev-parse outputs against native Git
@@ -84,17 +84,17 @@ class RevParseAndShowTest {
 
         writeFile(root, "f.txt", "base\n");
         repo.stage("f.txt");
-        String base = repo.commit("base\n", WHO, WHO);
+        String base = repo.commit("base\n", WHO, WHO).id();
 
         Branch topic = repo.createBranch("topic");
         writeFile(root, "m.txt", "main1\n");
         repo.stage("m.txt");
-        String main1 = repo.commit("main1\n", WHO, WHO);
+        String main1 = repo.commit("main1\n", WHO, WHO).id();
 
         repo.switchBranch(topic);
         writeFile(root, "t.txt", "topic1\n");
         repo.stage("t.txt");
-        String topic1 = repo.commit("topic1\n", WHO, WHO);
+        String topic1 = repo.commit("topic1\n", WHO, WHO).id();
         repo.switchBranch("main");
 
         Branch main = repo.branch("main");
@@ -160,11 +160,11 @@ class RevParseAndShowTest {
         writeFile(root, "bin/run.sh", "#!/bin/sh\necho ok\n");
         assertTrue(root.resolve("bin/run.sh").toFile().setExecutable(true));
         repo.stage("README.md", "src/nested/Main.java", "bin/run.sh");
-        Commit c1 = repo.commit(repo.commit("initial\n", WHO, WHO));
+        Commit c1 = repo.commit("initial\n", WHO, WHO);
 
         writeFile(root, "README.md", "v2 readme\n");
         repo.stage("README.md");
-        Commit c2 = repo.commit(repo.commit("update readme\n", WHO, WHO));
+        Commit c2 = repo.commit("update readme\n", WHO, WHO);
 
         // Staged but uncommitted modification in index
         writeFile(root, "README.md", "staged v3\n");
@@ -183,7 +183,7 @@ class RevParseAndShowTest {
         byte[] binary = new byte[]{0, 1, 2, (byte) 0xff, 42, 0};
         Files.write(root.resolve("data.bin"), binary);
         repo.stage("data.bin");
-        Commit c3 = repo.commit(repo.commit("binary\n", WHO, WHO));
+        Commit c3 = repo.commit("binary\n", WHO, WHO);
         assertArrayEquals(binary, repo.showBlob(c3, "data.bin"));
 
         // Tree listing matches git ls-tree order and metadata

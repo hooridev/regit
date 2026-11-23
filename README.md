@@ -28,7 +28,7 @@ var checkout = Path.of("docs-checkout");
 var agent = main.addWorktree(checkout, branch);
 Files.writeString(checkout.resolve("README.md"), "Updated version\n");
 agent.stage("README.md");
-String tip = agent.commit("Update documentation\n", author, author);
+var tip = agent.commit("Update documentation\n", author, author);
 
 main.merge(branch, author, "Merge documentation\n");
 main.removeWorktree(agent);

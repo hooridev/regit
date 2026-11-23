@@ -23,12 +23,12 @@ class MergeAndRebaseTest {
 
         writeFile(root, "base.txt", "base\n");
         repo.stage("base.txt");
-        Commit c1 = repo.commit(repo.commit("base\n", WHO, WHO));
+        Commit c1 = repo.commit("base\n", WHO, WHO);
 
         Branch feat = repo.checkoutNewBranch("feat");
         writeFile(root, "feat.txt", "feat\n");
         repo.stage("feat.txt");
-        Commit f1 = repo.commit(repo.commit("feat\n", WHO, WHO));
+        Commit f1 = repo.commit("feat\n", WHO, WHO);
 
         repo.switchBranch("main");
         // --no-ff forces a 2-parent merge commit even though fast-forward is possible
@@ -42,7 +42,7 @@ class MergeAndRebaseTest {
         Branch side = repo.checkoutNewBranch("side", c1);
         writeFile(root, "side.txt", "side\n");
         repo.stage("side.txt");
-        Commit s1 = repo.commit(repo.commit("side\n", WHO, WHO));
+        Commit s1 = repo.commit("side\n", WHO, WHO);
         repo.switchBranch("main");
 
         // --ff-only must fail on diverged history
@@ -76,7 +76,7 @@ class MergeAndRebaseTest {
         Branch ahead = repo.checkoutNewBranch("ahead");
         writeFile(root, "ahead.txt", "ahead\n");
         repo.stage("ahead.txt");
-        Commit a1 = repo.commit(repo.commit("ahead\n", WHO, WHO));
+        Commit a1 = repo.commit("ahead\n", WHO, WHO);
         repo.switchBranch("main");
         MergeResult ff = repo.merge(ahead, WHO, "ff\n", MergeOptions.defaults().fastForwardOnly());
         assertEquals(MergeResult.Status.FAST_FORWARD, ff.status());
@@ -97,13 +97,13 @@ class MergeAndRebaseTest {
         writeFile(root, "one.txt", "topic-one\n");
         writeFile(root, "two.txt", "topic-two\n");
         repo.stageAll();
-        Commit t1 = repo.commit(repo.commit("topic edits\n", WHO, WHO));
+        Commit t1 = repo.commit("topic edits\n", WHO, WHO);
 
         repo.switchBranch("main");
         writeFile(root, "one.txt", "main-one\n");
         writeFile(root, "two.txt", "main-two\n");
         repo.stageAll();
-        Commit m1 = repo.commit(repo.commit("main edits\n", WHO, WHO));
+        Commit m1 = repo.commit("main edits\n", WHO, WHO);
 
         // Merge with allowConflicts writes markers, stages 1..3 and MERGE_HEAD
         MergeResult res = repo.merge(topic, WHO, "merge topic\n", MergeOptions.defaults().allowConflicts());
@@ -156,17 +156,17 @@ class MergeAndRebaseTest {
 
         writeFile(work, "base.txt", "v1\n");
         repo.stage("base.txt");
-        Commit base = repo.commit(repo.commit("base\n", WHO, WHO));
+        Commit base = repo.commit("base\n", WHO, WHO);
         repo.push(origin, PushOptions.defaults().setUpstream());
 
         Branch topic = repo.checkoutNewBranch("topic");
         writeFile(work, "a.txt", "a1\n");
         repo.stage("a.txt");
-        Commit cA = repo.commit(repo.commit("feat: alpha\n", WHO, WHO));
+        Commit cA = repo.commit("feat: alpha\n", WHO, WHO);
 
         writeFile(work, "b.txt", "b1\n");
         repo.stage("b.txt");
-        Commit cB = repo.commit(repo.commit("feat: beta\n", WHO, WHO));
+        Commit cB = repo.commit("feat: beta\n", WHO, WHO);
 
         // Fixup targeting feat: alpha (out of order!)
         writeFile(work, "a.txt", "a2-fixed\n");
@@ -176,7 +176,7 @@ class MergeAndRebaseTest {
         repo.switchBranch("main");
         writeFile(work, "upstream.txt", "upstream\n");
         repo.stage("upstream.txt");
-        Commit upstream = repo.commit(repo.commit("upstream\n", WHO, WHO));
+        Commit upstream = repo.commit("upstream\n", WHO, WHO);
         repo.push(origin);
 
         // Rebase topic onto RemoteBranch origin/main with --autosquash!
@@ -218,16 +218,16 @@ class MergeAndRebaseTest {
         Branch topic = repo.checkoutNewBranch("topic");
         writeFile(root, "shared.txt", "topic1\n");
         repo.stage("shared.txt");
-        Commit t1 = repo.commit(repo.commit("topic1\n", WHO, WHO));
+        Commit t1 = repo.commit("topic1\n", WHO, WHO);
 
         writeFile(root, "second.txt", "topic2\n");
         repo.stage("second.txt");
-        Commit t2 = repo.commit(repo.commit("topic2\n", WHO, WHO));
+        Commit t2 = repo.commit("topic2\n", WHO, WHO);
 
         repo.switchBranch("main");
         writeFile(root, "shared.txt", "main1\n");
         repo.stage("shared.txt");
-        Commit m1 = repo.commit(repo.commit("main1\n", WHO, WHO));
+        Commit m1 = repo.commit("main1\n", WHO, WHO);
 
         // 1. Start rebase with conflict -> abortRebase restores topic completely
         repo.switchBranch(topic);

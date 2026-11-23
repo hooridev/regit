@@ -94,7 +94,7 @@ class StagingAndCommitTest {
         // Commit another file while draft.txt is intent-to-add -> draft.txt must NOT enter the tree!
         writeFile(root, "base.txt", "base updated\n");
         repo.stage("base.txt");
-        Commit committed = repo.commit(repo.commit("update base\n", WHO, WHO));
+        Commit committed = repo.commit("update base\n", WHO, WHO);
         assertThrows(IOException.class, () -> repo.showBlob(committed, "draft.txt"));
         assertEquals(" A draft.txt", git(root, "status", "--porcelain"));
 
@@ -119,7 +119,7 @@ class StagingAndCommitTest {
 
         writeFile(root, "app.txt", "v1\n");
         repo.stage("app.txt");
-        Commit c1 = repo.commit(repo.commit("feat: initial feature\n\ndetails\n", WHO, WHO));
+        Commit c1 = repo.commit("feat: initial feature\n\ndetails\n", WHO, WHO);
 
         // commit -a stages modified tracked file and ignores untracked
         writeFile(root, "app.txt", "v2\n");
@@ -159,7 +159,7 @@ class StagingAndCommitTest {
         Repository nativeRepo = Repository.init(nativeDir, "main");
         writeFile(nativeDir, "x.txt", "1\n");
         nativeRepo.stage("x.txt");
-        Commit nc1 = nativeRepo.commit(nativeRepo.commit("feat: initial feature\n\ndetails\n", WHO, WHO));
+        Commit nc1 = nativeRepo.commit("feat: initial feature\n\ndetails\n", WHO, WHO);
         writeFile(nativeDir, "x.txt", "2\n");
         git(nativeDir, "add", "x.txt");
         git(nativeDir, "commit", "--fixup=" + nc1.id());

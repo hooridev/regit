@@ -97,8 +97,7 @@ repo.stageAll();
 Commit created = repo.commit(
     "feat(api): add search endpoint\n\nIncludes pagination and filtering.\n",
     author,
-    author,
-    CommitOptions.defaults()
+    author
 );
 
 System.out.println("Created commit: " + created.shortId());

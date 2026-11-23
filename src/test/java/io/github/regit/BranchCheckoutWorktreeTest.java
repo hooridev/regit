@@ -27,11 +27,11 @@ class BranchCheckoutWorktreeTest {
 
         writeFile(root, "a.txt", "1\n");
         repo.stage("a.txt");
-        Commit c1 = repo.commit(repo.commit("c1\n", WHO, WHO));
+        Commit c1 = repo.commit("c1\n", WHO, WHO);
 
         writeFile(root, "a.txt", "2\n");
         repo.stage("a.txt");
-        Commit c2 = repo.commit(repo.commit("c2\n", WHO, WHO));
+        Commit c2 = repo.commit("c2\n", WHO, WHO);
         repo.push(origin, PushOptions.defaults().setUpstream());
 
         // createBranch at explicit Commit object
@@ -43,7 +43,7 @@ class BranchCheckoutWorktreeTest {
         assertEquals(Optional.of(topic), repo.currentBranchOptional());
         writeFile(root, "t.txt", "topic\n");
         repo.stage("t.txt");
-        Commit t1 = repo.commit(repo.commit("t1\n", WHO, WHO));
+        Commit t1 = repo.commit("t1\n", WHO, WHO);
 
         repo.switchBranch("main");
 
@@ -104,11 +104,11 @@ class BranchCheckoutWorktreeTest {
         writeFile(root, "file.txt", "v1\n");
         writeFile(root, "keep.txt", "keep-v1\n");
         repo.stageAll();
-        Commit c1 = repo.commit(repo.commit("c1\n", WHO, WHO));
+        Commit c1 = repo.commit("c1\n", WHO, WHO);
 
         writeFile(root, "file.txt", "v2\n");
         repo.stage("file.txt");
-        Commit c2 = repo.commit(repo.commit("c2\n", WHO, WHO));
+        Commit c2 = repo.commit("c2\n", WHO, WHO);
 
         // checkout -b from older Commit object
         Branch feat = repo.checkoutNewBranch("feat", c1);
@@ -159,11 +159,11 @@ class BranchCheckoutWorktreeTest {
 
         writeFile(root, "note.txt", "v1\n");
         repo.stage("note.txt");
-        Commit c1 = repo.commit(repo.commit("c1\n", WHO, WHO));
+        Commit c1 = repo.commit("c1\n", WHO, WHO);
 
         writeFile(root, "note.txt", "v2\n");
         repo.stage("note.txt");
-        Commit c2 = repo.commit(repo.commit("c2\n", WHO, WHO));
+        Commit c2 = repo.commit("c2\n", WHO, WHO);
 
         // worktree add -b <new-branch> <start-point>
         Path wtNewPath = tmp.resolve("wt-new");

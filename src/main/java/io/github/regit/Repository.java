@@ -503,10 +503,10 @@ public final class Repository {
         return normalized;
     }
 
-    /** Message is stored verbatim, including any trailing newline. */
-    public String commit(String message, Identity author, Identity committer) throws IOException {
+    /** Create a commit from the staged index. Message is stored verbatim, including any trailing newline. */
+    public Commit commit(String message, Identity author, Identity committer) throws IOException {
         return commit(Objects.requireNonNull(message), Objects.requireNonNull(author),
-                Objects.requireNonNull(committer), CommitOptions.defaults()).id();
+                Objects.requireNonNull(committer), CommitOptions.defaults());
     }
 
     /** Commit with options ({@code -a}, {@code --amend}, {@code --fixup}, {@code --allow-empty}). Also concludes a pending merge when {@code MERGE_HEAD} exists. */

@@ -25,7 +25,7 @@ class DiffTest {
         writeFile(root, "beta.txt", "keep\nremove-me\nend\n");
         writeFile(root, "drop.txt", "gone soon\n");
         repo.stage("alpha.txt", "beta.txt", "drop.txt");
-        Commit c1 = repo.commit(repo.commit("seed\n", WHO, WHO));
+        Commit c1 = repo.commit("seed\n", WHO, WHO);
 
         // Clean working tree -> --quiet / isEmpty
         assertTrue(repo.diff().isEmpty());
@@ -71,7 +71,7 @@ class DiffTest {
         assertEquals(git(root, "diff", "HEAD", "--shortstat"), vsHead.formatShortStat());
 
         // Commit staged changes and compare commit-to-commit diff using Commit & Branch objects
-        Commit c2 = repo.commit(repo.commit("second\n", WHO, WHO));
+        Commit c2 = repo.commit("second\n", WHO, WHO);
         Branch main = repo.currentBranch();
         Diff c1ToC2 = repo.diff(c1, c2);
         assertEquals(c1ToC2, repo.diff(c1, main));
@@ -104,7 +104,7 @@ class DiffTest {
         writeFile(root, "nonl.txt", "no trailing newline");
         Files.write(root.resolve("img.bin"), new byte[]{0, 1, 2, 3, 4});
         repo.stage("exact.txt", "similar.txt", "nonl.txt", "img.bin");
-        Commit c1 = repo.commit(repo.commit("base\n", WHO, WHO));
+        Commit c1 = repo.commit("base\n", WHO, WHO);
 
         // Exact rename, similar rename (90%), no-newline edit, binary edit
         Files.delete(root.resolve("exact.txt"));
@@ -114,7 +114,7 @@ class DiffTest {
         writeFile(root, "nonl.txt", "no trailing newline edited");
         Files.write(root.resolve("img.bin"), new byte[]{0, 1, 2, 3, 99});
         repo.stage("exact.txt", "moved/exact.txt", "similar.txt", "similar-renamed.txt", "nonl.txt", "img.bin");
-        Commit c2 = repo.commit(repo.commit("renames and binary\n", WHO, WHO));
+        Commit c2 = repo.commit("renames and binary\n", WHO, WHO);
 
         // Without -M: deleted + added
         Diff noRename = repo.diff(c1, c2);
@@ -155,23 +155,23 @@ class DiffTest {
 
         writeFile(root, "code.txt", "header\nfn a() {\n  return 1;\n}\nfooter\n");
         repo.stage("code.txt");
-        Commit c1 = repo.commit(repo.commit("init code\n", WHO, WHO));
+        Commit c1 = repo.commit("init code\n", WHO, WHO);
 
         writeFile(root, "other.txt", "unrelated change\n");
         repo.stage("other.txt");
-        Commit c2 = repo.commit(repo.commit("add other\n", WHO, WHO));
+        Commit c2 = repo.commit("add other\n", WHO, WHO);
 
         writeFile(root, "code.txt", "header\n// comment above\nfn a() {\n  return 2; // MAGIC_TOKEN\n}\nfooter\n");
         repo.stage("code.txt");
-        Commit c3 = repo.commit(repo.commit("update fn a with token\n", WHO, WHO));
+        Commit c3 = repo.commit("update fn a with token\n", WHO, WHO);
 
         writeFile(root, "code.txt", "header\n// comment above\nfn a() {\n  return 2; // MAGIC_TOKEN\n}\n// footer note\nfooter\n");
         repo.stage("code.txt");
-        Commit c4 = repo.commit(repo.commit("touch footer only\n", WHO, WHO));
+        Commit c4 = repo.commit("touch footer only\n", WHO, WHO);
 
         writeFile(root, "code.txt", "header\n// comment above\nfn a() {\n  return 3;\n}\n// footer note\nfooter\n");
         repo.stage("code.txt");
-        Commit c5 = repo.commit(repo.commit("remove token from fn a\n", WHO, WHO));
+        Commit c5 = repo.commit("remove token from fn a\n", WHO, WHO);
 
         // log -S MAGIC_TOKEN must match git log -S MAGIC_TOKEN --format=%H
         List<String> nativePickaxe = Arrays.asList(git(root, "log", "-S", "MAGIC_TOKEN", "--format=%H").split("\n"));

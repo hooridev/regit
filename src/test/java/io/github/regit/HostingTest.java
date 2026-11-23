@@ -23,11 +23,11 @@ class HostingTest {
         assertFalse(local.isBare());
         Files.writeString(work.resolve("note"), "initial");
         local.stage("note");
-        String first = local.commit("first\n", WHO, WHO);
+        String first = local.commit("first\n", WHO, WHO).id();
         local.push(directory, "main");
         Files.writeString(work.resolve("note"), "updated");
         local.stage("note");
-        String next = local.commit("second\n", WHO, WHO);
+        String next = local.commit("second\n", WHO, WHO).id();
         var source = new ObjectsDb(work.resolve(".git"));
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/repo.git", bare.httpHandler(GitHttpHandler.Access.READ_WRITE));
@@ -75,7 +75,7 @@ class HostingTest {
             assertThrows(java.io.IOException.class, () -> local.httpHandler(GitHttpHandler.Access.READ_ONLY));
             Files.writeString(source.resolve("note"), "first");
             local.stage("note");
-            String first = local.commit("first\n", WHO, WHO);
+            String first = local.commit("first\n", WHO, WHO).id();
             git(source, "push", writable, "main");
             assertEquals(first, bare.head().orElseThrow());
             git(tmp, "clone", mirror, copy.toString());
@@ -84,7 +84,7 @@ class HostingTest {
 
             Files.writeString(source.resolve("note"), "second");
             local.stage("note");
-            String second = local.commit("second\n", WHO, WHO);
+            String second = local.commit("second\n", WHO, WHO).id();
             git(source, "push", writable, "main");
             git(copy, "pull", "--ff-only");
             assertEquals(second, git(copy, "rev-parse", "HEAD"));
@@ -98,7 +98,7 @@ class HostingTest {
             assertEquals(second, next.pull(remote, "main", WHO, "pull\n"));
             Files.writeString(tmp.resolve("next/extra"), "shared");
             next.stage("extra");
-            String third = next.commit("third\n", WHO, WHO);
+            String third = next.commit("third\n", WHO, WHO).id();
             assertThrows(java.io.IOException.class, () -> next.push(new SmartHttpRemote(URI.create(mirror), client), "main"));
             assertEquals(second, bare.head().orElseThrow());
             assertEquals(third, next.push(remote, "main"));
