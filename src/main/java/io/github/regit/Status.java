@@ -16,12 +16,19 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
         untracked = Collections.unmodifiableSortedSet(new TreeSet<>(untracked));
     }
 
-    static Status scan(Layout layout, WorkingTree work, Map<String, Entry> head, Map<String, Index.EntryRecord> index)
+    static Status scan(Layout layout, WorkingTree work, Map<String, Entry> head, List<Index.EntryRecord> rawIndex)
             throws IOException {
+        var index = new TreeMap<String, Index.EntryRecord>(Entry.BYTE_ORDER);
+        var conflicted = new HashSet<String>();
+        for (Index.EntryRecord rec : rawIndex) {
+            if (rec.stage() == 0) index.put(rec.path(), rec);
+            else conflicted.add(rec.path());
+        }
         var staged = new TreeMap<String, Change>(Entry.BYTE_ORDER);
         var unstaged = new TreeMap<String, Change>(Entry.BYTE_ORDER);
         var untracked = new TreeSet<String>(Entry.BYTE_ORDER);
         for (String path : head.keySet()) {
+            if (conflicted.contains(path)) continue;
             Index.EntryRecord rec = index.get(path);
             if (rec == null || rec.intentToAdd()) staged.put(path, Change.DELETED);
         }
@@ -41,6 +48,10 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
             Path dir = root.resolve(name).getParent();
             while (!dir.equals(root) && trackedDirectories.add(dir)) dir = dir.getParent();
         }
+        for (String name : conflicted) {
+            Path dir = root.resolve(name).getParent();
+            while (!dir.equals(root) && trackedDirectories.add(dir)) dir = dir.getParent();
+        }
         var missing = new HashSet<>(index.keySet());
         Files.walkFileTree(root, new SimpleFileVisitor<>() {
             @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
@@ -54,6 +65,7 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
             @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 if (file.getFileName().toString().equalsIgnoreCase(".git")) return FileVisitResult.CONTINUE;
                 String path = root.relativize(file).toString().replace(file.getFileSystem().getSeparator(), "/");
+                if (conflicted.contains(path)) return FileVisitResult.CONTINUE;
                 if (missing.remove(path)) {
                     Index.EntryRecord rec = index.get(path);
                     if (rec.intentToAdd()) {

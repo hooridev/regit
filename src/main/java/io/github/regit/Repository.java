@@ -372,12 +372,16 @@ public final class Repository {
 
     @FunctionalInterface private interface Action<T> { T run() throws IOException; }
     private <T> T change(Lifecycle.Operation operation, String target, Action<T> action) throws IOException {
+        return change(operation, target, false, action);
+    }
+    private <T> T change(Lifecycle.Operation operation, String target, boolean allowMergeOrRebase, Action<T> action)
+            throws IOException {
         Path location = layout.root() == null ? layout.common() : layout.root();
         var event = new Lifecycle.Event(operation, location, target);
         T result;
-        layout.ready();
+        layout.ready(allowMergeOrRebase);
         try (var guard = new Lock(layout.admin().resolve("regit-operation"))) {
-            layout.ready();
+            layout.ready(allowMergeOrRebase);
             lifecycle.before(event);
             result = action.run();
         }
@@ -392,18 +396,34 @@ public final class Repository {
     public Status status() throws IOException {
         var work = working();
         return Status.scan(layout, work, snapshot(new Revisions(layout, db).resolveHeadOptional()),
-                Index.readStage0(layout.index()));
+                Index.readAll(layout.index()));
+    }
+
+    /** Paths with unresolved merge/rebase conflicts in the index (stages 1..3). */
+    public SortedSet<String> conflictedFiles() throws IOException {
+        working();
+        return Index.conflictedPaths(layout.index());
+    }
+
+    /** True when a merge is currently paused ({@code MERGE_HEAD} exists). */
+    public boolean isMergeInProgress() {
+        return Files.exists(layout.admin().resolve("MERGE_HEAD"));
+    }
+
+    /** True when a rebase is currently paused ({@code rebase-merge} directory exists). */
+    public boolean isRebaseInProgress() {
+        return Files.isDirectory(layout.admin().resolve("rebase-merge"));
     }
 
     /** List ignored untracked files in Git byte order ({@code git status --ignored}). */
     public SortedSet<String> ignoredFiles() throws IOException {
         working();
-        return Status.scanIgnored(layout, Index.readStage0(layout.index()));
+        return Status.scanIgnored(layout, Index.readStage0AllowConflicts(layout.index()));
     }
 
     /** Stage exact, repository-relative regular file paths. Missing tracked files stage deletion. */
     public void stage(String... paths) throws IOException {
-        change(Lifecycle.Operation.STAGE, String.join(", ", paths), () -> {
+        change(Lifecycle.Operation.STAGE, String.join(", ", paths), true, () -> {
             new Staging(layout, db).stageExact(paths);
             return null;
         });
@@ -413,7 +433,7 @@ public final class Repository {
     public void stage(Path... paths) throws IOException {
         var normalized = new ArrayList<String>(paths.length);
         for (Path p : Objects.requireNonNull(paths)) normalized.add(layout.repoPath(p));
-        change(Lifecycle.Operation.STAGE, String.join(", ", normalized), () -> {
+        change(Lifecycle.Operation.STAGE, String.join(", ", normalized), true, () -> {
             new Staging(layout, db).stagePaths(normalized);
             return null;
         });
@@ -421,7 +441,7 @@ public final class Repository {
 
     /** Stage all modified, deleted and non-ignored untracked files ({@code git add -A}). */
     public void stageAll() throws IOException {
-        change(Lifecycle.Operation.STAGE, "-A", () -> {
+        change(Lifecycle.Operation.STAGE, "-A", true, () -> {
             new Staging(layout, db).stageAll(List.of());
             return null;
         });
@@ -430,7 +450,7 @@ public final class Repository {
     /** Stage all changes under the specified paths ({@code git add -A -- <paths>}). */
     public void stageAll(Path... paths) throws IOException {
         var normalized = normalizePathArgs(paths);
-        change(Lifecycle.Operation.STAGE, "-A " + String.join(", ", normalized), () -> {
+        change(Lifecycle.Operation.STAGE, "-A " + String.join(", ", normalized), true, () -> {
             new Staging(layout, db).stageAll(normalized);
             return null;
         });
@@ -438,7 +458,7 @@ public final class Repository {
 
     /** Stage all modified and deleted tracked files without adding untracked files ({@code git add -u}). */
     public void stageUpdated() throws IOException {
-        change(Lifecycle.Operation.STAGE, "-u", () -> {
+        change(Lifecycle.Operation.STAGE, "-u", true, () -> {
             new Staging(layout, db).stageUpdated(List.of());
             return null;
         });
@@ -447,7 +467,7 @@ public final class Repository {
     /** Stage all modified and deleted tracked files under the specified paths ({@code git add -u -- <paths>}). */
     public void stageUpdated(Path... paths) throws IOException {
         var normalized = normalizePathArgs(paths);
-        change(Lifecycle.Operation.STAGE, "-u " + String.join(", ", normalized), () -> {
+        change(Lifecycle.Operation.STAGE, "-u " + String.join(", ", normalized), true, () -> {
             new Staging(layout, db).stageUpdated(normalized);
             return null;
         });
@@ -489,12 +509,16 @@ public final class Repository {
                 Objects.requireNonNull(committer), CommitOptions.defaults()).id();
     }
 
-    /** Commit with options ({@code -a}, {@code --amend}, {@code --fixup}, {@code --allow-empty}). Works on attached or detached HEAD. */
+    /** Commit with options ({@code -a}, {@code --amend}, {@code --fixup}, {@code --allow-empty}). Also concludes a pending merge when {@code MERGE_HEAD} exists. */
     public Commit commit(String message, Identity author, Identity committer, CommitOptions options) throws IOException {
         Objects.requireNonNull(committer, "committer");
         Objects.requireNonNull(options, "options");
-        return change(Lifecycle.Operation.COMMIT, "", () -> {
+        boolean completingMerge = Files.exists(layout.admin().resolve("MERGE_HEAD"));
+        return change(Lifecycle.Operation.COMMIT, "", completingMerge, () -> {
             var work = working();
+            if (completingMerge && options.isAmend()) {
+                throw new IOException("Cannot amend while a merge is in progress");
+            }
             Optional<String> attached = layout.currentBranchOptional();
             try (var head = new Lock(layout.head());
                  var ref = attached.isPresent() ? new Lock(layout.ref(attached.get())) : null;
@@ -520,11 +544,24 @@ public final class Repository {
                 List<String> parents;
                 String resolvedAuthor;
                 String resolvedMessage;
+                Path mergeHeadFile = layout.admin().resolve("MERGE_HEAD");
+                Path mergeMsgFile = layout.admin().resolve("MERGE_MSG");
                 if (options.isAmend()) {
                     Revision previous = revision(old);
                     parents = previous.parents();
                     resolvedAuthor = author != null ? author.header() : previous.author();
                     resolvedMessage = resolveCommitMessage(message, options.fixupTarget(), previous.message());
+                } else if (Files.exists(mergeHeadFile)) {
+                    var parentList = new ArrayList<String>();
+                    if (old != null) parentList.add(old);
+                    for (String line : Files.readAllLines(mergeHeadFile)) {
+                        String trimmed = line.strip();
+                        if (!trimmed.isEmpty()) parentList.add(GitFiles.id(trimmed));
+                    }
+                    parents = List.copyOf(parentList);
+                    resolvedAuthor = Objects.requireNonNull(author, "author").header();
+                    String defaultMergeMsg = Files.exists(mergeMsgFile) ? Files.readString(mergeMsgFile) : null;
+                    resolvedMessage = resolveCommitMessage(message, options.fixupTarget(), defaultMergeMsg);
                 } else {
                     if (!options.isAllowEmpty()
                             && (old == null ? committedFiles.isEmpty() : revision(old).tree().equals(tree))) {
@@ -539,6 +576,11 @@ public final class Repository {
                 String tip = rev.write(db, committer);
                 if (ref != null) ref.publish(tip + "\n");
                 else head.publish(tip + "\n");
+                if (Files.exists(mergeHeadFile)) {
+                    Files.deleteIfExists(mergeHeadFile);
+                    Files.deleteIfExists(mergeMsgFile);
+                    Files.deleteIfExists(layout.admin().resolve("MERGE_MODE"));
+                }
                 return revision(tip).toCommit(tip);
             }
         });
@@ -950,6 +992,49 @@ public final class Repository {
         }
     }
 
+    /** Check out {@code --ours} (stage 2) for conflicted paths into the working tree ({@code git checkout --ours -- <paths>}). */
+    public void checkoutOurs(String... paths) throws IOException {
+        checkoutConflictSide(2, normalizeFilePathStrings(paths));
+    }
+
+    /** Check out {@code --ours} (stage 2) for conflicted {@link Path} targets into the working tree. */
+    public void checkoutOurs(Path... paths) throws IOException {
+        checkoutConflictSide(2, normalizeFilePaths(paths));
+    }
+
+    /** Check out {@code --theirs} (stage 3) for conflicted paths into the working tree ({@code git checkout --theirs -- <paths>}). */
+    public void checkoutTheirs(String... paths) throws IOException {
+        checkoutConflictSide(3, normalizeFilePathStrings(paths));
+    }
+
+    /** Check out {@code --theirs} (stage 3) for conflicted {@link Path} targets into the working tree. */
+    public void checkoutTheirs(Path... paths) throws IOException {
+        checkoutConflictSide(3, normalizeFilePaths(paths));
+    }
+
+    private void checkoutConflictSide(int stage, List<String> paths) throws IOException {
+        change(Lifecycle.Operation.SWITCH, (stage == 2 ? "--ours " : "--theirs ") + String.join(", ", paths), true, () -> {
+            Merges.checkoutConflictSide(layout, db, stage, paths);
+            return null;
+        });
+    }
+
+    private List<String> normalizeFilePathStrings(String... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (String p : Objects.requireNonNull(paths)) normalized.add(Layout.normalizeRelativePath(p, false));
+        return normalized;
+    }
+
+    private List<String> normalizeFilePaths(Path... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (Path p : Objects.requireNonNull(paths)) {
+            String rel = layout.repoPath(p);
+            if (rel.isEmpty()) throw new IOException("Expected file path");
+            normalized.add(rel);
+        }
+        return normalized;
+    }
+
     /** Merge the currently checked-out branch of another worktree in this repository. */
     public String merge(Repository source, Identity who, String message) throws IOException {
         return merge(liveWorktree(source).current(), who, message);
@@ -960,59 +1045,72 @@ public final class Repository {
     }
 
     public String merge(String source, Identity who, String message) throws IOException {
-        return change(Lifecycle.Operation.MERGE, source, () -> integrate(layout.require(source), who, message, false));
+        return merge(CommitRef.of(source), who, Objects.requireNonNull(message), MergeOptions.defaults())
+                .commit().orElseThrow().id();
     }
+
+    /** Merge any {@link CommitRef} ({@link Branch}, {@link RemoteBranch}, {@link Commit}, etc.) with {@link MergeOptions}. */
+    public MergeResult merge(CommitRef source, Identity who, String message, MergeOptions options) throws IOException {
+        String label = Objects.requireNonNull(source, "source").toString();
+        return change(Lifecycle.Operation.MERGE, label, () -> {
+            String sourceId = new Revisions(layout, db).resolveCommit(source);
+            return Merges.merge(layout, db, trees, contentMerge, sourceId, label, who, message, options);
+        });
+    }
+
+    /** Merge a revision string with {@link MergeOptions}. */
+    public MergeResult merge(String source, Identity who, String message, MergeOptions options) throws IOException {
+        return merge(CommitRef.of(source), who, message, options);
+    }
+
+    /** Abort an in-progress merge ({@code git merge --abort}), restoring {@code HEAD}, index and working tree. */
+    public void abortMerge() throws IOException {
+        change(Lifecycle.Operation.MERGE, "--abort", true, () -> {
+            Merges.abortMerge(layout, db, trees);
+            return null;
+        });
+    }
+
     public String rebase(Branch onto, Identity who) throws IOException {
-        return rebase(onto.nameIn(layout), who);
+        return rebase(onto, who, RebaseOptions.defaults()).head().orElseThrow().id();
     }
 
     public String rebase(String onto, Identity who) throws IOException {
-        return change(Lifecycle.Operation.REBASE, onto, () -> integrate(layout.require(onto), who, "", true));
+        return rebase(CommitRef.of(onto), who, RebaseOptions.defaults()).head().orElseThrow().id();
     }
+
+    /** Rebase current HEAD onto {@code upstream} (accepting {@link Branch}, {@link RemoteBranch}, {@link Commit}, etc.) with {@link RebaseOptions}. */
+    public RebaseResult rebase(CommitRef upstream, Identity who, RebaseOptions options) throws IOException {
+        String label = Objects.requireNonNull(upstream, "upstream").toString();
+        return change(Lifecycle.Operation.REBASE, label, () -> {
+            String upstreamId = new Revisions(layout, db).resolveCommit(upstream);
+            return Rebaser.rebase(layout, db, trees, contentMerge, upstreamId, who, options);
+        });
+    }
+
+    /** Rebase current HEAD onto a revision string (e.g. {@code "origin/main"}) with {@link RebaseOptions}. */
+    public RebaseResult rebase(String upstream, Identity who, RebaseOptions options) throws IOException {
+        return rebase(CommitRef.of(upstream), who, options);
+    }
+
+    /** Continue a paused rebase after resolving and staging conflicts ({@code git rebase --continue}). */
+    public RebaseResult continueRebase(Identity who) throws IOException {
+        return change(Lifecycle.Operation.REBASE, "--continue", true,
+                () -> Rebaser.continueRebase(layout, db, trees, contentMerge, who));
+    }
+
+    /** Abort a paused rebase and restore the original branch and working tree ({@code git rebase --abort}). */
+    public void abortRebase() throws IOException {
+        change(Lifecycle.Operation.REBASE, "--abort", true, () -> {
+            Rebaser.abortRebase(layout, db, trees);
+            return null;
+        });
+    }
+
+    /** Internal fast-forward/merge helper used by {@code pull}. */
     private String integrate(String source, Identity who, String message, boolean replay) throws IOException {
-        working();
-        try (var head = new Lock(layout.head()); var ref = new Lock(layout.ref(branch()))) {
-            String old = layout.tip(branch());
-            var history = new History(db);
-            String tip = source;
-            if (old != null) {
-                if (old.equals(source)) return old;
-                if (!history.contains(source, old)) {
-                    if (history.contains(old, source)) return old;
-                    String base = history.base(old, source);
-                    if (replay) tip = replay(old, base, source, history, who);
-                    else {
-                        var merged = new ThreeWay(db, contentMerge).merge(snapshot(base), snapshot(old), snapshot(source));
-                        tip = new Revision(trees.write(merged), List.of(old, source), who.header(),
-                                Objects.requireNonNull(message)).write(db, who);
-                    }
-                }
-            }
-            String result = tip;
-            updateWork(old, result, () -> ref.publish(result + "\n"));
-            return result;
-        }
-    }
-    private String replay(String old, String base, String onto, History history, Identity who) throws IOException {
-        var sequence = new ArrayDeque<Revision>();
-        for (String id = old; !id.equals(base); ) {
-            var commit = history.read(id);
-            if (commit.parents().size() != 1) throw new IOException("Rebase requires a linear topic history");
-            sequence.push(commit);
-            id = commit.parents().getFirst();
-        }
-        var current = snapshot(onto);
-        String tip = onto;
-        for (var commit : sequence) {
-            var parent = snapshot(commit.parents().getFirst());
-            var original = trees.flatten(commit.tree());
-            var result = new ThreeWay(db, contentMerge).merge(parent, current, original);
-            if (!result.equals(current) || parent.equals(original)) {
-                tip = new Revision(trees.write(result), List.of(tip), commit.author(), commit.message()).write(db, who);
-            }
-            current = result;
-        }
-        return tip;
+        return Merges.merge(layout, db, trees, contentMerge, source, source, who,
+                Objects.requireNonNull(message), MergeOptions.defaults()).commit().orElseThrow().id();
     }
     /** List configured named remotes. */
     public List<Remote> remotes() throws IOException { return Remotes.list(layout); }

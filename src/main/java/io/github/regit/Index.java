@@ -92,6 +92,49 @@ final class Index {
         return map;
     }
 
+    /** Return all paths that currently have unmerged conflict stages (stage 1, 2 or 3) in Git byte order. */
+    static SortedSet<String> conflictedPaths(Path file) throws IOException {
+        var conflicts = new TreeSet<String>(Entry.BYTE_ORDER);
+        for (EntryRecord rec : readAll(file)) {
+            if (rec.stage() != 0) conflicts.add(rec.path());
+        }
+        return Collections.unmodifiableSortedSet(conflicts);
+    }
+
+    /** Map stage (1..3) to entry for a single conflicted path. */
+    static Map<Integer, Entry> conflictStages(Path file, String path) throws IOException {
+        var stages = new HashMap<Integer, Entry>();
+        for (EntryRecord rec : readAll(file)) {
+            if (rec.stage() != 0 && rec.path().equals(path)) stages.put(rec.stage(), rec.entry());
+        }
+        return stages;
+    }
+
+    /** Read all stage-0 entries including intent-to-add records, tolerating conflict entries (excluded from map). */
+    static Map<String, EntryRecord> readStage0AllowConflicts(Path file) throws IOException {
+        Map<String, EntryRecord> map = new TreeMap<>(Entry.BYTE_ORDER);
+        for (EntryRecord rec : readAll(file)) {
+            if (rec.stage() == 0) map.put(rec.path(), rec);
+        }
+        return map;
+    }
+
+    /** Build index records from resolved stage-0 entries plus conflict entries (stages 1=base, 2=ours, 3=theirs). */
+    static List<EntryRecord> combineWithConflicts(Map<String, Entry> resolved, Map<String, ThreeWay.Conflict> conflicts) {
+        var records = new ArrayList<EntryRecord>(resolved.size() + conflicts.size() * 3);
+        for (var e : resolved.entrySet()) {
+            records.add(new EntryRecord(e.getKey(), e.getValue(), 0, false));
+        }
+        for (var e : conflicts.entrySet()) {
+            String path = e.getKey();
+            ThreeWay.Conflict c = e.getValue();
+            if (c.base() != null) records.add(new EntryRecord(path, c.base(), 1, false));
+            if (c.ours() != null) records.add(new EntryRecord(path, c.ours(), 2, false));
+            if (c.theirs() != null) records.add(new EntryRecord(path, c.theirs(), 3, false));
+        }
+        return records;
+    }
+
     static byte[] encode(Map<String, Entry> files) throws IOException {
         var list = new ArrayList<EntryRecord>(files.size());
         for (var e : files.entrySet()) {

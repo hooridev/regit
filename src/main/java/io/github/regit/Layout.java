@@ -151,10 +151,16 @@ record Layout(Path root, Path admin, Path common) {
         return core;
     }
     void ready() throws IOException {
+        ready(false);
+    }
+
+    void ready(boolean allowMergeOrRebase) throws IOException {
         if (!Files.isRegularFile(head()) || (root != null && !Files.isDirectory(root)))
             throw new IOException("Worktree no longer exists");
         for (String marker : List.of("MERGE_HEAD","CHERRY_PICK_HEAD","REVERT_HEAD","rebase-merge","rebase-apply",
-                "sequencer","BISECT_START","index.sparse"))
+                "sequencer","BISECT_START","index.sparse")) {
+            if (allowMergeOrRebase && (marker.equals("MERGE_HEAD") || marker.equals("rebase-merge"))) continue;
             if (Files.exists(admin.resolve(marker))) throw new IOException("Operation in progress: " + marker);
+        }
     }
 }

@@ -17,26 +17,30 @@ final class Staging {
         this.db = db;
     }
 
-    /** Stage exact repository-relative file paths (strict behavior preserving existing {@code stage(String...)} contract). */
+    /** Stage exact repository-relative file paths (resolves conflict stages if present). */
     void stageExact(String[] paths) throws IOException {
         WorkingTree work = requireWorkingTree();
         try (var lock = new Lock(layout.index())) {
-            var entries = new TreeMap<>(Index.readStage0(layout.index()));
+            List<Index.EntryRecord> all = Index.readAll(layout.index());
+            var entries = extractStage0(all);
+            var conflicts = extractConflicts(all);
             var ignore = new IgnoreRules(layout);
             for (String path : paths) {
                 Path file = work.resolve(path);
-                if (!entries.containsKey(path) && ignore.excludes(file, Files.isDirectory(file, NOFOLLOW_LINKS)))
+                boolean tracked = entries.containsKey(path) || conflicts.containsKey(path);
+                if (!tracked && ignore.excludes(file, Files.isDirectory(file, NOFOLLOW_LINKS)))
                     throw new IOException("Ignored path: " + path);
             }
             for (String path : paths) {
                 var inspected = work.inspect(path, true);
+                boolean hadConflict = conflicts.remove(path) != null;
                 if (inspected != null) {
                     putEntry(entries, path, new Index.EntryRecord(path, inspected, 0, false));
-                } else if (entries.remove(path) == null) {
+                } else if (entries.remove(path) == null && !hadConflict) {
                     throw new IOException("Unknown path: " + path);
                 }
             }
-            lock.publish(Index.encodeStage0(entries));
+            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -44,37 +48,39 @@ final class Staging {
     void stagePaths(List<String> targets) throws IOException {
         WorkingTree work = requireWorkingTree();
         try (var lock = new Lock(layout.index())) {
-            var entries = new TreeMap<>(Index.readStage0(layout.index()));
+            List<Index.EntryRecord> all = Index.readAll(layout.index());
+            var entries = extractStage0(all);
+            var conflicts = extractConflicts(all);
             var ignore = new IgnoreRules(layout);
-            // Validate explicit file targets for ignore before modifying blobs or index
             for (String target : targets) {
                 if (target.isEmpty()) continue;
                 Path file = work.resolve(target);
                 boolean dir = Files.isDirectory(file, NOFOLLOW_LINKS);
-                if (!dir && !entries.containsKey(target) && ignore.excludes(file, false)) {
+                boolean tracked = entries.containsKey(target) || conflicts.containsKey(target);
+                if (!dir && !tracked && ignore.excludes(file, false)) {
                     throw new IOException("Ignored path: " + target);
                 }
             }
             for (String target : targets) {
                 if (target.isEmpty()) {
-                    stageAllUnlocked(work, entries, ignore, List.of());
+                    stageAllUnlocked(work, entries, conflicts, ignore, List.of());
                     continue;
                 }
                 Path file = work.resolve(target);
                 if (Files.isDirectory(file, NOFOLLOW_LINKS)) {
-                    stageAllUnlocked(work, entries, ignore, List.of(target));
+                    stageAllUnlocked(work, entries, conflicts, ignore, List.of(target));
                 } else {
                     var inspected = work.inspect(target, true);
+                    boolean hadConflict = conflicts.remove(target) != null;
                     if (inspected != null) {
                         putEntry(entries, target, new Index.EntryRecord(target, inspected, 0, false));
-                    } else if (entries.remove(target) == null) {
-                        // Also check if target was a deleted tracked directory prefix
+                    } else if (entries.remove(target) == null && !hadConflict) {
                         var removed = removeTrackedUnder(entries, target);
                         if (!removed) throw new IOException("Unknown path: " + target);
                     }
                 }
             }
-            lock.publish(Index.encodeStage0(entries));
+            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -82,10 +88,12 @@ final class Staging {
     void stageAll(List<String> filters) throws IOException {
         WorkingTree work = requireWorkingTree();
         try (var lock = new Lock(layout.index())) {
-            var entries = new TreeMap<>(Index.readStage0(layout.index()));
+            List<Index.EntryRecord> all = Index.readAll(layout.index());
+            var entries = extractStage0(all);
+            var conflicts = extractConflicts(all);
             var ignore = new IgnoreRules(layout);
-            stageAllUnlocked(work, entries, ignore, filters);
-            lock.publish(Index.encodeStage0(entries));
+            stageAllUnlocked(work, entries, conflicts, ignore, filters);
+            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -93,9 +101,12 @@ final class Staging {
     void stageUpdated(List<String> filters) throws IOException {
         WorkingTree work = requireWorkingTree();
         try (var lock = new Lock(layout.index())) {
-            var entries = new TreeMap<>(Index.readStage0(layout.index()));
+            List<Index.EntryRecord> all = Index.readAll(layout.index());
+            var entries = extractStage0(all);
+            var conflicts = extractConflicts(all);
             stageUpdatedUnlocked(work, entries, filters);
-            lock.publish(Index.encodeStage0(entries));
+            resolveMatchingConflicts(work, entries, conflicts, filters);
+            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -142,9 +153,11 @@ final class Staging {
     }
 
     private void stageAllUnlocked(WorkingTree work, TreeMap<String, Index.EntryRecord> entries,
+                                  Map<String, List<Index.EntryRecord>> conflicts,
                                   IgnoreRules ignore, List<String> filters) throws IOException {
-        // 1. Update or remove all matching tracked entries
+        // 1. Update or remove all matching tracked entries and resolve matching conflicts
         stageUpdatedUnlocked(work, entries, filters);
+        resolveMatchingConflicts(work, entries, conflicts, filters);
 
         // 2. Walk working tree and stage all matching non-ignored untracked regular files
         Path root = layout.root();
@@ -166,7 +179,7 @@ final class Staging {
                 if (!attrs.isRegularFile()) return FileVisitResult.CONTINUE;
                 String rel = root.relativize(file).toString().replace(file.getFileSystem().getSeparator(), "/");
                 if (!matchesFilter(rel, filters)) return FileVisitResult.CONTINUE;
-                if (entries.containsKey(rel)) return FileVisitResult.CONTINUE;
+                if (entries.containsKey(rel) || conflicts.containsKey(rel)) return FileVisitResult.CONTINUE;
                 if (ignore.excludes(file, false)) return FileVisitResult.CONTINUE;
                 Entry inspected = work.inspect(rel, true);
                 if (inspected != null) {
@@ -175,6 +188,41 @@ final class Staging {
                 return FileVisitResult.CONTINUE;
             }
         });
+    }
+
+    private static void resolveMatchingConflicts(WorkingTree work, TreeMap<String, Index.EntryRecord> entries,
+                                                 Map<String, List<Index.EntryRecord>> conflicts,
+                                                 List<String> filters) throws IOException {
+        for (String path : new ArrayList<>(conflicts.keySet())) {
+            if (!matchesFilter(path, filters)) continue;
+            conflicts.remove(path);
+            Entry inspected = work.inspect(path, true);
+            if (inspected != null) putEntry(entries, path, new Index.EntryRecord(path, inspected, 0, false));
+        }
+    }
+
+    private static TreeMap<String, Index.EntryRecord> extractStage0(List<Index.EntryRecord> all) {
+        var map = new TreeMap<String, Index.EntryRecord>(Entry.BYTE_ORDER);
+        for (Index.EntryRecord rec : all) {
+            if (rec.stage() == 0) map.put(rec.path(), rec);
+        }
+        return map;
+    }
+
+    private static Map<String, List<Index.EntryRecord>> extractConflicts(List<Index.EntryRecord> all) {
+        var map = new LinkedHashMap<String, List<Index.EntryRecord>>();
+        for (Index.EntryRecord rec : all) {
+            if (rec.stage() != 0) map.computeIfAbsent(rec.path(), k -> new ArrayList<>()).add(rec);
+        }
+        return map;
+    }
+
+    private static List<Index.EntryRecord> mergeStage0AndConflicts(Map<String, Index.EntryRecord> stage0,
+                                                                   Map<String, List<Index.EntryRecord>> conflicts) {
+        var list = new ArrayList<Index.EntryRecord>(stage0.size() + conflicts.size() * 3);
+        list.addAll(stage0.values());
+        for (var group : conflicts.values()) list.addAll(group);
+        return list;
     }
 
     private static void putEntry(TreeMap<String, Index.EntryRecord> entries, String path, Index.EntryRecord rec) {

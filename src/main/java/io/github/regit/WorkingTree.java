@@ -97,6 +97,48 @@ final class WorkingTree {
         replace(name, entry);
     }
 
+    /** Write arbitrary bytes to a worktree file (e.g. conflict markers), creating parent directories. */
+    void writeRaw(String name, byte[] content, int mode) throws IOException {
+        Path file = resolve(name);
+        Files.createDirectories(file.getParent());
+        Path tmp = Files.exists(file) ? Files.createTempFile(file.getParent(), ".regit-", ".tmp")
+                : Files.createFile(file.resolveSibling(".regit-" + UUID.randomUUID()));
+        try {
+            Files.write(tmp, content);
+            if (Files.getFileStore(tmp).supportsFileAttributeView(PosixFileAttributeView.class)) {
+                var permissions = Files.exists(file) ? Files.getPosixFilePermissions(file)
+                        : Files.getPosixFilePermissions(tmp);
+                for (var bit : List.of(PosixFilePermission.OWNER_EXECUTE, PosixFilePermission.GROUP_EXECUTE,
+                        PosixFilePermission.OTHERS_EXECUTE)) {
+                    if (mode == Entry.EXEC) permissions.add(bit);
+                    else permissions.remove(bit);
+                }
+                Files.setPosixFilePermissions(tmp, permissions);
+            }
+            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally { Files.deleteIfExists(tmp); }
+    }
+
+    /** Force-reset tracked files to {@code to} (used by merge/rebase conflict checkout and {@code --abort}). */
+    void forceReset(Set<String> previouslyTracked, Map<String, Entry> to) throws IOException {
+        var directories = new TreeSet<Path>(Comparator.comparingInt(Path::getNameCount)
+                .reversed().thenComparing(Comparator.naturalOrder()));
+        for (String name : previouslyTracked) {
+            if (to.containsKey(name)) continue;
+            Path file = resolve(name);
+            if (Files.deleteIfExists(file)) {
+                for (Path p = file.getParent(); !p.equals(root); p = p.getParent()) directories.add(p);
+            }
+        }
+        for (Path dir : directories) {
+            try { Files.deleteIfExists(dir); }
+            catch (DirectoryNotEmptyException ignored) {}
+        }
+        for (var e : to.entrySet()) {
+            replace(e.getKey(), e.getValue());
+        }
+    }
+
     private void replace(String name, Entry entry) throws IOException {
         Path file = resolve(name);
         if (entry == null) { Files.delete(file); return; }

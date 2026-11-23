@@ -33,6 +33,22 @@ final class TextMerge {
         original.subList(copied, original.size()).forEach(output::append);
         return output.toString().getBytes(UTF_8);
     }
+    /** Format standard Git conflict markers for two conflicting versions of a file. */
+    static byte[] formatConflict(byte[] ours, byte[] theirs, String oursLabel, String theirsLabel) {
+        if (DiffEngine.isBinary(ours) || DiffEngine.isBinary(theirs)) return ours;
+        String left = new String(ours, UTF_8);
+        String right = new String(theirs, UTF_8);
+        var out = new StringBuilder();
+        out.append("<<<<<<< ").append(oursLabel).append('\n');
+        out.append(left);
+        if (!left.isEmpty() && !left.endsWith("\n")) out.append('\n');
+        out.append("=======\n");
+        out.append(right);
+        if (!right.isEmpty() && !right.endsWith("\n")) out.append('\n');
+        out.append(">>>>>>> ").append(theirsLabel).append('\n');
+        return out.toString().getBytes(UTF_8);
+    }
+
     /** Trim common ends before computing the bounded longest-common-subsequence matrix. */
     private static List<Edit> diff(String path, List<String> a, List<String> b) throws MergeConflict {
         int start = 0, ae = a.size(), be = b.size();
