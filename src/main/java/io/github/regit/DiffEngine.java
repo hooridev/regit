@@ -30,8 +30,15 @@ final class DiffEngine {
 
     Diff diffWorktreeToIndex(DiffOptions options) throws IOException {
         WorkingTree work = requireWorkingTree();
-        Map<String, Entry> index = Index.read(layout.index());
-        return compute(fromEntries(index), worktreeSnapshot(work, index.keySet()), options);
+        Map<String, Index.EntryRecord> raw = Index.readStage0(layout.index());
+        var from = new HashMap<String, SnapshotEntry>(raw.size());
+        for (var e : raw.entrySet()) {
+            if (!e.getValue().intentToAdd()) {
+                Entry entry = e.getValue().entry();
+                from.put(e.getKey(), new SnapshotEntry(entry.mode(), entry.hash(), () -> db.read(entry.hash(), "blob")));
+            }
+        }
+        return compute(from, worktreeSnapshot(work, raw.keySet()), options);
     }
 
     Diff diffIndexToHead(DiffOptions options) throws IOException {

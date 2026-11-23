@@ -16,19 +16,22 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
         untracked = Collections.unmodifiableSortedSet(new TreeSet<>(untracked));
     }
 
-    static Status scan(Layout layout, WorkingTree work, Map<String, Entry> head, Map<String, Entry> index)
+    static Status scan(Layout layout, WorkingTree work, Map<String, Entry> head, Map<String, Index.EntryRecord> index)
             throws IOException {
         var staged = new TreeMap<String, Change>(Entry.BYTE_ORDER);
         var unstaged = new TreeMap<String, Change>(Entry.BYTE_ORDER);
         var untracked = new TreeSet<String>(Entry.BYTE_ORDER);
         for (String path : head.keySet()) {
-            if (!index.containsKey(path)) staged.put(path, Change.DELETED);
+            Index.EntryRecord rec = index.get(path);
+            if (rec == null || rec.intentToAdd()) staged.put(path, Change.DELETED);
         }
         for (var item : index.entrySet()) {
             String path = item.getKey();
+            Index.EntryRecord rec = item.getValue();
+            if (rec.intentToAdd()) continue;
             Entry previous = head.get(path);
             if (previous == null) staged.put(path, Change.ADDED);
-            else if (!previous.equals(item.getValue())) staged.put(path, Change.MODIFIED);
+            else if (!previous.equals(rec.entry())) staged.put(path, Change.MODIFIED);
         }
 
         var ignore = new IgnoreRules(layout);
@@ -52,14 +55,47 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
                 if (file.getFileName().toString().equalsIgnoreCase(".git")) return FileVisitResult.CONTINUE;
                 String path = root.relativize(file).toString().replace(file.getFileSystem().getSeparator(), "/");
                 if (missing.remove(path)) {
-                    if (!attrs.isRegularFile()) unstaged.put(path, Change.TYPE_CHANGED);
-                    else if (!index.get(path).equals(work.inspect(path, false))) unstaged.put(path, Change.MODIFIED);
+                    Index.EntryRecord rec = index.get(path);
+                    if (rec.intentToAdd()) {
+                        unstaged.put(path, Change.ADDED);
+                    } else if (!attrs.isRegularFile()) {
+                        unstaged.put(path, Change.TYPE_CHANGED);
+                    } else if (!rec.entry().equals(work.inspect(path, false))) {
+                        unstaged.put(path, Change.MODIFIED);
+                    }
                 } else if ((attrs.isRegularFile() || attrs.isSymbolicLink()) && !ignore.excludes(file, false))
                     untracked.add(path);
                 return FileVisitResult.CONTINUE;
             }
         });
-        for (String path : missing) unstaged.put(path, Change.DELETED);
+        for (String path : missing) {
+            if (!index.get(path).intentToAdd()) unstaged.put(path, Change.DELETED);
+        }
         return new Status(staged, unstaged, untracked);
+    }
+
+    /** Scan ignored untracked files ({@code git status --ignored --porcelain -uall}). */
+    static SortedSet<String> scanIgnored(Layout layout, Map<String, Index.EntryRecord> index) throws IOException {
+        var ignored = new TreeSet<String>(Entry.BYTE_ORDER);
+        var ignore = new IgnoreRules(layout);
+        Path root = layout.root();
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                if (dir.equals(root)) return FileVisitResult.CONTINUE;
+                if (dir.getFileName().toString().equalsIgnoreCase(".git")) return FileVisitResult.SKIP_SUBTREE;
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                if (file.getFileName().toString().equalsIgnoreCase(".git")) return FileVisitResult.CONTINUE;
+                if (!attrs.isRegularFile() && !attrs.isSymbolicLink()) return FileVisitResult.CONTINUE;
+                String path = root.relativize(file).toString().replace(file.getFileSystem().getSeparator(), "/");
+                if (!index.containsKey(path) && ignore.excludes(file, false)) {
+                    ignored.add(path);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return Collections.unmodifiableSortedSet(ignored);
     }
 }

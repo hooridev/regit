@@ -377,54 +377,190 @@ public final class Repository {
     /** Compare HEAD, this worktree's index and its files. */
     public Status status() throws IOException {
         var work = working();
-        return Status.scan(layout, work, snapshot(layout.tip(branch())), Index.read(layout.index()));
+        return Status.scan(layout, work, snapshot(new Revisions(layout, db).resolveHeadOptional()),
+                Index.readStage0(layout.index()));
+    }
+
+    /** List ignored untracked files in Git byte order ({@code git status --ignored}). */
+    public SortedSet<String> ignoredFiles() throws IOException {
+        working();
+        return Status.scanIgnored(layout, Index.readStage0(layout.index()));
     }
 
     /** Stage exact, repository-relative regular file paths. Missing tracked files stage deletion. */
     public void stage(String... paths) throws IOException {
         change(Lifecycle.Operation.STAGE, String.join(", ", paths), () -> {
-            var work = working();
-            try (var lock = new Lock(layout.index())) {
-                var files = new TreeMap<>(Index.read(layout.index()));
-                var ignore = new IgnoreRules(layout);
-                for (String path : paths) {
-                    Path file = work.resolve(path);
-                    if (!files.containsKey(path) && ignore.excludes(file, Files.isDirectory(file, LinkOption.NOFOLLOW_LINKS)))
-                        throw new IOException("Ignored path: " + path);
-                }
-                for (String path : paths) {
-                    var entry = work.inspect(path, true);
-                    if (entry != null) {
-                        for (int end = path.indexOf('/'); end >= 0; end = path.indexOf('/', end + 1))
-                            files.remove(path.substring(0, end));
-                        files.subMap(path + "/", path + "0").clear();
-                        files.put(path, entry);
-                    }
-                    else if (files.remove(path) == null) throw new IOException("Unknown path: " + path);
-                }
-                lock.publish(Index.encode(files));
-            }
+            new Staging(layout, db).stageExact(paths);
             return null;
         });
     }
+
+    /** Stage one or more files or directories (accepting relative or worktree-local {@link Path} targets). */
+    public void stage(Path... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (Path p : Objects.requireNonNull(paths)) normalized.add(layout.repoPath(p));
+        change(Lifecycle.Operation.STAGE, String.join(", ", normalized), () -> {
+            new Staging(layout, db).stagePaths(normalized);
+            return null;
+        });
+    }
+
+    /** Stage all modified, deleted and non-ignored untracked files ({@code git add -A}). */
+    public void stageAll() throws IOException {
+        change(Lifecycle.Operation.STAGE, "-A", () -> {
+            new Staging(layout, db).stageAll(List.of());
+            return null;
+        });
+    }
+
+    /** Stage all changes under the specified paths ({@code git add -A -- <paths>}). */
+    public void stageAll(Path... paths) throws IOException {
+        var normalized = normalizePathArgs(paths);
+        change(Lifecycle.Operation.STAGE, "-A " + String.join(", ", normalized), () -> {
+            new Staging(layout, db).stageAll(normalized);
+            return null;
+        });
+    }
+
+    /** Stage all modified and deleted tracked files without adding untracked files ({@code git add -u}). */
+    public void stageUpdated() throws IOException {
+        change(Lifecycle.Operation.STAGE, "-u", () -> {
+            new Staging(layout, db).stageUpdated(List.of());
+            return null;
+        });
+    }
+
+    /** Stage all modified and deleted tracked files under the specified paths ({@code git add -u -- <paths>}). */
+    public void stageUpdated(Path... paths) throws IOException {
+        var normalized = normalizePathArgs(paths);
+        change(Lifecycle.Operation.STAGE, "-u " + String.join(", ", normalized), () -> {
+            new Staging(layout, db).stageUpdated(normalized);
+            return null;
+        });
+    }
+
+    /** Record untracked paths in the index with {@code intent-to-add} ({@code git add -N}). */
+    public void stageIntentToAdd(String... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (String p : Objects.requireNonNull(paths)) normalized.add(Layout.normalizeRelativePath(p, false));
+        change(Lifecycle.Operation.STAGE, "-N " + String.join(", ", normalized), () -> {
+            new Staging(layout, db).stageIntentToAdd(normalized);
+            return null;
+        });
+    }
+
+    /** Record untracked {@link Path} targets in the index with {@code intent-to-add} ({@code git add -N}). */
+    public void stageIntentToAdd(Path... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (Path p : Objects.requireNonNull(paths)) {
+            String rel = layout.repoPath(p);
+            if (rel.isEmpty()) throw new IOException("Expected file path");
+            normalized.add(rel);
+        }
+        change(Lifecycle.Operation.STAGE, "-N " + String.join(", ", normalized), () -> {
+            new Staging(layout, db).stageIntentToAdd(normalized);
+            return null;
+        });
+    }
+
+    private List<String> normalizePathArgs(Path... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (Path p : Objects.requireNonNull(paths)) normalized.add(layout.repoPath(p));
+        return normalized;
+    }
+
     /** Message is stored verbatim, including any trailing newline. */
     public String commit(String message, Identity author, Identity committer) throws IOException {
+        return commit(Objects.requireNonNull(message), Objects.requireNonNull(author),
+                Objects.requireNonNull(committer), CommitOptions.defaults()).id();
+    }
+
+    /** Commit with options ({@code -a}, {@code --amend}, {@code --fixup}, {@code --allow-empty}). */
+    public Commit commit(String message, Identity author, Identity committer, CommitOptions options) throws IOException {
+        Objects.requireNonNull(committer, "committer");
+        Objects.requireNonNull(options, "options");
         return change(Lifecycle.Operation.COMMIT, "", () -> {
-            working();
-            try (var head = new Lock(layout.head()); var ref = new Lock(layout.ref(branch()));
+            var work = working();
+            String branchName = branch();
+            try (var head = new Lock(layout.head()); var ref = new Lock(layout.ref(branchName));
                  var index = new Lock(layout.index())) {
-                String old = layout.tip(branch());
-                var files = Index.read(layout.index());
-                String tree = trees.write(files);
-                if (old == null ? files.isEmpty() : revision(old).tree().equals(tree))
-                    throw new IOException("Nothing staged to commit");
-                var commit = new Revision(tree, old == null ? List.of() : List.of(old), author.header(),
-                        Objects.requireNonNull(message));
-                String tip = commit.write(db, committer);
+                String old = layout.tip(branchName);
+                if (options.isAmend() && old == null) {
+                    throw new IOException("Cannot amend an unborn branch");
+                }
+                var stage0 = new TreeMap<>(Index.readStage0(layout.index()));
+                if (options.isAll()) {
+                    new Staging(layout, db).stageUpdatedUnlocked(work, stage0, List.of());
+                    index.publish(Index.encodeStage0(stage0));
+                }
+                // Build tree from non-intent-to-add stage-0 entries
+                var committedFiles = new HashMap<String, Entry>(stage0.size());
+                for (var e : stage0.entrySet()) {
+                    if (!e.getValue().intentToAdd()) committedFiles.put(e.getKey(), e.getValue().entry());
+                }
+                String tree = trees.write(committedFiles);
+
+                List<String> parents;
+                String resolvedAuthor;
+                String resolvedMessage;
+                if (options.isAmend()) {
+                    Revision previous = revision(old);
+                    parents = previous.parents();
+                    resolvedAuthor = author != null ? author.header() : previous.author();
+                    resolvedMessage = resolveCommitMessage(message, options.fixupTarget(), previous.message());
+                } else {
+                    if (!options.isAllowEmpty()
+                            && (old == null ? committedFiles.isEmpty() : revision(old).tree().equals(tree))) {
+                        throw new IOException("Nothing staged to commit");
+                    }
+                    parents = old == null ? List.of() : List.of(old);
+                    resolvedAuthor = Objects.requireNonNull(author, "author").header();
+                    resolvedMessage = resolveCommitMessage(message, options.fixupTarget(), null);
+                }
+
+                var rev = new Revision(tree, parents, resolvedAuthor, resolvedMessage);
+                String tip = rev.write(db, committer);
                 ref.publish(tip + "\n");
-                return tip;
+                return revision(tip).toCommit(tip);
             }
         });
+    }
+
+    private String resolveCommitMessage(String message, CommitRef fixupTarget, String fallback) throws IOException {
+        if (fixupTarget != null) {
+            Commit target = commit(fixupTarget);
+            return "fixup! " + target.subject() + "\n";
+        }
+        if (message != null) return message;
+        if (fallback != null) return fallback;
+        throw new NullPointerException("Commit message is required");
+    }
+
+    /** Stage all modified/deleted tracked files and commit ({@code git commit -a -m ...}). */
+    public Commit commitAll(String message, Identity author, Identity committer) throws IOException {
+        return commit(Objects.requireNonNull(message), Objects.requireNonNull(author),
+                committer, CommitOptions.defaults().all());
+    }
+
+    /** Amend the current HEAD commit with a new message ({@code git commit --amend -m ...}). */
+    public Commit amend(String message, Identity author, Identity committer) throws IOException {
+        return commit(Objects.requireNonNull(message), author, committer, CommitOptions.defaults().amend());
+    }
+
+    /** Amend the current HEAD commit keeping its original author and message ({@code git commit --amend --no-edit}). */
+    public Commit amendNoEdit(Identity committer) throws IOException {
+        return commit(null, null, committer, CommitOptions.defaults().amend());
+    }
+
+    /** Create a {@code fixup!} commit targeting {@code target} ({@code git commit --fixup=<target>}). */
+    public Commit fixup(CommitRef target, Identity author, Identity committer) throws IOException {
+        return commit(null, Objects.requireNonNull(author), committer, CommitOptions.defaults().fixup(target));
+    }
+
+    /** Create a {@code fixup!} commit with extra options (e.g. {@code CommitOptions.defaults().all()}). */
+    public Commit fixup(CommitRef target, Identity author, Identity committer, CommitOptions options) throws IOException {
+        return commit(null, Objects.requireNonNull(author), committer,
+                Objects.requireNonNull(options).fixup(target));
     }
     public SortedSet<String> branches() throws IOException { return Branches.names(layout); }
     public List<Branch> localBranches() throws IOException {
