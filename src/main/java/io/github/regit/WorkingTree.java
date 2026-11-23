@@ -93,6 +93,10 @@ final class WorkingTree {
             throw failure;
         }
     }
+    void materializeEntry(String name, Entry entry) throws IOException {
+        replace(name, entry);
+    }
+
     private void replace(String name, Entry entry) throws IOException {
         Path file = resolve(name);
         if (entry == null) { Files.delete(file); return; }

@@ -202,13 +202,21 @@ public final class Repository {
     public String branch() throws IOException { return layout.current(); }
     public Branch currentBranch() throws IOException { return new Branch(layout, branch()); }
 
+    /** Current local branch ({@code git branch --show-current}), or empty when {@code HEAD} is detached. */
+    public Optional<Branch> currentBranchOptional() throws IOException {
+        return layout.currentBranchOptional().map(name -> new Branch(layout, name));
+    }
+
     /** Look up an existing local branch by its short name. */
     public Branch branch(String name) throws IOException {
         layout.require(name);
         return new Branch(layout, name);
     }
 
-    public Optional<String> head() throws IOException { return Optional.ofNullable(layout.tip(branch())); }
+    /** Commit ID of {@code HEAD} (attached or detached), or empty on an unborn branch. */
+    public Optional<String> head() throws IOException {
+        return Optional.ofNullable(new Revisions(layout, db).resolveHeadOptional());
+    }
 
     /** Resolve {@code HEAD} (attached or detached) to its commit, or empty on an unborn branch. */
     public Optional<Commit> headCommit() throws IOException {
@@ -481,16 +489,19 @@ public final class Repository {
                 Objects.requireNonNull(committer), CommitOptions.defaults()).id();
     }
 
-    /** Commit with options ({@code -a}, {@code --amend}, {@code --fixup}, {@code --allow-empty}). */
+    /** Commit with options ({@code -a}, {@code --amend}, {@code --fixup}, {@code --allow-empty}). Works on attached or detached HEAD. */
     public Commit commit(String message, Identity author, Identity committer, CommitOptions options) throws IOException {
         Objects.requireNonNull(committer, "committer");
         Objects.requireNonNull(options, "options");
         return change(Lifecycle.Operation.COMMIT, "", () -> {
             var work = working();
-            String branchName = branch();
-            try (var head = new Lock(layout.head()); var ref = new Lock(layout.ref(branchName));
+            Optional<String> attached = layout.currentBranchOptional();
+            try (var head = new Lock(layout.head());
+                 var ref = attached.isPresent() ? new Lock(layout.ref(attached.get())) : null;
                  var index = new Lock(layout.index())) {
-                String old = layout.tip(branchName);
+                String old = attached.isPresent()
+                        ? layout.tip(attached.get())
+                        : new Revisions(layout, db).resolveHeadOptional();
                 if (options.isAmend() && old == null) {
                     throw new IOException("Cannot amend an unborn branch");
                 }
@@ -526,7 +537,8 @@ public final class Repository {
 
                 var rev = new Revision(tree, parents, resolvedAuthor, resolvedMessage);
                 String tip = rev.write(db, committer);
-                ref.publish(tip + "\n");
+                if (ref != null) ref.publish(tip + "\n");
+                else head.publish(tip + "\n");
                 return revision(tip).toCommit(tip);
             }
         });
@@ -572,27 +584,112 @@ public final class Repository {
     public List<Branch> localBranches() throws IOException {
         return branches().stream().map(name -> new Branch(layout, name)).toList();
     }
+
+    /** List all local and remote-tracking branches ({@code git branch -a}). */
+    public List<CommitRef> allBranches() throws IOException {
+        var all = new ArrayList<CommitRef>(localBranches());
+        all.addAll(remoteBranches());
+        return Collections.unmodifiableList(all);
+    }
+
+    /** Detailed metadata for all local branches ({@code git branch -vv}). */
+    public List<BranchInfo> branchInfos() throws IOException {
+        return Branches.infos(layout, db);
+    }
+
+    /** Local branches merged into {@code HEAD} ({@code git branch --merged}). */
+    public List<Branch> mergedBranches() throws IOException {
+        return mergedBranches(CommitRef.of("HEAD"));
+    }
+
+    /** Local branches merged into {@code target} ({@code git branch --merged <target>}). */
+    public List<Branch> mergedBranches(CommitRef target) throws IOException {
+        return Branches.filterMerged(layout, db, resolve(target), true);
+    }
+
+    /** Local branches not yet merged into {@code HEAD} ({@code git branch --no-merged}). */
+    public List<Branch> unmergedBranches() throws IOException {
+        return unmergedBranches(CommitRef.of("HEAD"));
+    }
+
+    /** Local branches not yet merged into {@code target} ({@code git branch --no-merged <target>}). */
+    public List<Branch> unmergedBranches(CommitRef target) throws IOException {
+        return Branches.filterMerged(layout, db, resolve(target), false);
+    }
+
+    /** Local branches whose history contains {@code commit} ({@code git branch --contains <commit>}). */
+    public List<Branch> branchesContaining(CommitRef commit) throws IOException {
+        return Branches.filterContaining(layout, db, resolve(commit));
+    }
+
+    /** Local branches whose history contains {@code revision} ({@code git branch --contains <rev>}). */
+    public List<Branch> branchesContaining(String revision) throws IOException {
+        return branchesContaining(CommitRef.of(revision));
+    }
+
     public List<Path> worktrees() throws IOException { return Worktrees.roots(layout); }
+
+    /** Structured worktree listing matching {@code git worktree list --porcelain}. */
+    public List<WorktreeInfo> worktreeList() throws IOException { return Worktrees.list(layout, db); }
 
     public void deleteBranch(Branch branch) throws IOException { deleteBranch(branch.nameIn(layout)); }
 
-    /** Delete a branch only if its tip is merged into HEAD and no worktree owns it. */
+    /** Delete a branch only if its tip is merged into HEAD and no worktree owns it ({@code git branch -d}). */
     public void deleteBranch(String name) throws IOException {
         change(Lifecycle.Operation.DELETE_BRANCH, name, () -> {
-            if (name.equals(branch())) throw new IOException("Cannot delete the current branch");
-            Branches.deleteMerged(layout, name, db);
+            if (layout.currentBranchOptional().filter(name::equals).isPresent())
+                throw new IOException("Cannot delete the current branch");
+            Branches.delete(layout, name, db, false);
             return null;
         });
     }
+
+    /** Force-delete a branch even if unmerged ({@code git branch -D}). Still refuses if checked out. */
+    public void forceDeleteBranch(Branch branch) throws IOException { forceDeleteBranch(branch.nameIn(layout)); }
+
+    /** Force-delete a branch by name ({@code git branch -D}). */
+    public void forceDeleteBranch(String name) throws IOException {
+        change(Lifecycle.Operation.DELETE_BRANCH, name, () -> {
+            if (layout.currentBranchOptional().filter(name::equals).isPresent())
+                throw new IOException("Cannot delete the current branch");
+            Branches.delete(layout, name, db, true);
+            return null;
+        });
+    }
+
+    /** Rename an existing local branch ({@code git branch -m}), updating checked-out HEADs and tracking config. */
+    public Branch renameBranch(Branch branch, String newName) throws IOException {
+        return renameBranch(branch.nameIn(layout), newName);
+    }
+
+    /** Rename a local branch by name ({@code git branch -m}). */
+    public Branch renameBranch(String oldName, String newName) throws IOException {
+        return change(Lifecycle.Operation.BRANCH, newName, () -> {
+            Branches.rename(layout, oldName, newName);
+            return new Branch(layout, newName);
+        });
+    }
+
     /** Remove a clean linked checkout, keeping its branch. Call on another repository handle. */
     public void removeWorktree(Path destination) throws IOException {
-        removeWorktree(destination, () -> Layout.open(destination));
+        removeWorktree(destination, () -> Layout.open(destination), false);
     }
 
     /** Remove the clean linked checkout represented by this handle, keeping its branch. */
     public void removeWorktree(Repository worktree) throws IOException {
         if (worktree.isBare()) throw new IOException("Expected a worktree");
-        removeWorktree(worktree.layout.root(), () -> liveWorktree(worktree));
+        removeWorktree(worktree.layout.root(), () -> liveWorktree(worktree), false);
+    }
+
+    /** Force-remove a linked checkout even with dirty or untracked files ({@code git worktree remove --force}). */
+    public void removeWorktreeForce(Path destination) throws IOException {
+        removeWorktree(destination, () -> Layout.open(destination), true);
+    }
+
+    /** Force-remove a linked checkout represented by this handle ({@code git worktree remove --force}). */
+    public void removeWorktreeForce(Repository worktree) throws IOException {
+        if (worktree.isBare()) throw new IOException("Expected a worktree");
+        removeWorktree(worktree.layout.root(), () -> liveWorktree(worktree), true);
     }
 
     private Layout liveWorktree(Repository worktree) throws IOException {
@@ -603,78 +700,225 @@ public final class Repository {
         return expected;
     }
 
-    private void removeWorktree(Path destination, Action<Layout> resolve) throws IOException {
+    private void removeWorktree(Path destination, Action<Layout> resolve, boolean force) throws IOException {
         change(Lifecycle.Operation.REMOVE_WORKTREE, destination.toString(), () -> {
-            Worktrees.remove(layout, resolve.run(), db);
+            Worktrees.remove(layout, resolve.run(), db, force);
             return null;
         });
     }
+
     public Branch createBranch(String name) throws IOException {
+        return createBranch(name, CommitRef.of("HEAD"));
+    }
+
+    /** Create a new local branch pointing to {@code startPoint} ({@code git branch <name> <start-point>}). */
+    public Branch createBranch(String name, CommitRef startPoint) throws IOException {
         return change(Lifecycle.Operation.BRANCH, name, () -> {
-            Branches.checkNew(layout, name);
-            try (var ref = new Lock(layout.ref(name))) {
-                Branches.prepareNew(layout, name);
-                ref.publish(layout.require(branch()) + "\n");
-            }
+            String tip = new Revisions(layout, db).resolveCommit(startPoint);
+            Branches.createAt(layout, name, tip, false);
             return new Branch(layout, name);
         });
+    }
+
+    /** Create a new local branch at a revision expression ({@code git branch <name> <start-point>}). */
+    public Branch createBranch(String name, String startPoint) throws IOException {
+        return createBranch(name, CommitRef.of(startPoint));
+    }
+
+    /** Create or forcefully reset an unchecked-out branch to {@code startPoint} ({@code git branch -f}). */
+    public Branch forceCreateBranch(String name, CommitRef startPoint) throws IOException {
+        return change(Lifecycle.Operation.BRANCH, name, () -> {
+            String tip = new Revisions(layout, db).resolveCommit(startPoint);
+            Branches.createAt(layout, name, tip, true);
+            return new Branch(layout, name);
+        });
+    }
+
+    /** Create or forcefully reset an unchecked-out branch by revision string ({@code git branch -f}). */
+    public Branch forceCreateBranch(String name, String startPoint) throws IOException {
+        return forceCreateBranch(name, CommitRef.of(startPoint));
     }
 
     public void switchBranch(Branch branch) throws IOException { switchBranch(branch.nameIn(layout)); }
 
     public void switchBranch(String name) throws IOException {
         change(Lifecycle.Operation.SWITCH, name, () -> {
-            if (branch().equals(name)) return null;
+            Optional<String> current = layout.currentBranchOptional();
+            if (current.isPresent() && current.get().equals(name)) return null;
             try (var head = new Lock(layout.head()); var target = new Lock(layout.ref(name));
-                 var current = new Lock(layout.ref(branch()))) {
+                 var currentRef = current.isPresent() ? new Lock(layout.ref(current.get())) : null) {
                 layout.available(name);
-                updateWork(layout.tip(branch()), layout.require(name), () -> head.publish("ref: refs/heads/" + name + "\n"));
+                String oldTip = new Revisions(layout, db).resolveHeadOptional();
+                updateWork(oldTip, layout.require(name), () -> head.publish("ref: refs/heads/" + name + "\n"));
             }
             return null;
         });
     }
+
+    /** Create a new branch at {@code HEAD} and switch to it ({@code git checkout -b <name>}). */
+    public Branch checkoutNewBranch(String name) throws IOException {
+        return checkoutNewBranch(name, CommitRef.of("HEAD"));
+    }
+
+    /** Create a new branch at {@code startPoint} and switch to it ({@code git checkout -b <name> <start>}). */
+    public Branch checkoutNewBranch(String name, CommitRef startPoint) throws IOException {
+        return change(Lifecycle.Operation.SWITCH, name, () -> {
+            Branches.checkNew(layout, name);
+            String targetTip = new Revisions(layout, db).resolveCommit(startPoint);
+            String oldTip = new Revisions(layout, db).resolveHeadOptional();
+            try (var head = new Lock(layout.head()); var ref = new Lock(layout.ref(name))) {
+                Branches.clearEmptyRefDir(layout, name);
+                updateWork(oldTip, targetTip, () -> {
+                    ref.publish(targetTip + "\n");
+                    head.publish("ref: refs/heads/" + name + "\n");
+                });
+            }
+            return new Branch(layout, name);
+        });
+    }
+
+    /** Create a new branch at {@code startPoint} and switch to it ({@code git checkout -b}). */
+    public Branch checkoutNewBranch(String name, String startPoint) throws IOException {
+        return checkoutNewBranch(name, CommitRef.of(startPoint));
+    }
+
+    /** Create or reset branch {@code name} to {@code startPoint} and switch to it ({@code git checkout -B}). */
+    public Branch checkoutResetBranch(String name, CommitRef startPoint) throws IOException {
+        return change(Lifecycle.Operation.SWITCH, name, () -> {
+            Branches.checkNamespaceForExistingOrNew(layout, name);
+            Optional<String> current = layout.currentBranchOptional();
+            boolean isCurrent = current.isPresent() && current.get().equals(name);
+            if (!isCurrent && layout.tip(name) != null) layout.available(name);
+            String targetTip = new Revisions(layout, db).resolveCommit(startPoint);
+            String oldTip = new Revisions(layout, db).resolveHeadOptional();
+            try (var head = new Lock(layout.head()); var ref = new Lock(layout.ref(name))) {
+                Branches.clearEmptyRefDir(layout, name);
+                updateWork(oldTip, targetTip, () -> {
+                    ref.publish(targetTip + "\n");
+                    head.publish("ref: refs/heads/" + name + "\n");
+                });
+            }
+            return new Branch(layout, name);
+        });
+    }
+
+    /** Create or reset branch {@code name} at {@code HEAD} and switch to it ({@code git checkout -B <name>}). */
+    public Branch checkoutResetBranch(String name) throws IOException {
+        return checkoutResetBranch(name, CommitRef.of("HEAD"));
+    }
+
+    /** Check out {@code target} in detached HEAD mode ({@code git checkout --detach <target>}). */
+    public Commit checkoutDetached(CommitRef target) throws IOException {
+        return change(Lifecycle.Operation.SWITCH, "HEAD", () -> {
+            String targetTip = new Revisions(layout, db).resolveCommit(target);
+            String oldTip = new Revisions(layout, db).resolveHeadOptional();
+            try (var head = new Lock(layout.head())) {
+                updateWork(oldTip, targetTip, () -> head.publish(targetTip + "\n"));
+            }
+            return revision(targetTip).toCommit(targetTip);
+        });
+    }
+
+    /** Check out a revision expression in detached HEAD mode ({@code git checkout --detach <rev>}). */
+    public Commit checkoutDetached(String revision) throws IOException {
+        return checkoutDetached(CommitRef.of(revision));
+    }
+
+    /** Restore files from {@code source} into both the index and working tree ({@code git checkout <rev> -- <paths>}). */
+    public void checkoutFiles(CommitRef source, String... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (String p : Objects.requireNonNull(paths)) normalized.add(Layout.normalizeRelativePath(p, false));
+        checkoutFilesInternal(source, normalized);
+    }
+
+    /** Restore {@link Path} targets from {@code source} into both the index and working tree. */
+    public void checkoutFiles(CommitRef source, Path... paths) throws IOException {
+        var normalized = new ArrayList<String>(paths.length);
+        for (Path p : Objects.requireNonNull(paths)) {
+            String rel = layout.repoPath(p);
+            if (rel.isEmpty()) throw new IOException("Expected file path");
+            normalized.add(rel);
+        }
+        checkoutFilesInternal(source, normalized);
+    }
+
+    private void checkoutFilesInternal(CommitRef source, List<String> paths) throws IOException {
+        change(Lifecycle.Operation.SWITCH, String.join(", ", paths), () -> {
+            var work = working();
+            String tip = new Revisions(layout, db).resolveCommit(source);
+            var treeFiles = snapshot(tip);
+            for (String path : paths) {
+                if (!treeFiles.containsKey(path)) throw new IOException("Path not found in source: " + path);
+            }
+            try (var lock = new Lock(layout.index())) {
+                var entries = new TreeMap<>(Index.readStage0(layout.index()));
+                for (String path : paths) {
+                    Entry entry = treeFiles.get(path);
+                    work.materializeEntry(path, entry);
+                    entries.put(path, new Index.EntryRecord(path, entry, 0, false));
+                }
+                lock.publish(Index.encodeStage0(entries));
+            }
+            return null;
+        });
+    }
+
     public Repository addWorktree(Path destination, Branch branch) throws IOException {
-        return addWorktree(destination, branch.nameIn(layout));
+        return addWorktree(destination, branch.nameIn(layout), WorktreeAddOptions.defaults());
+    }
+
+    /** Link an existing branch to a new directory with options (e.g. {@code --force}). */
+    public Repository addWorktree(Path destination, Branch branch, WorktreeAddOptions options) throws IOException {
+        return addWorktree(destination, branch.nameIn(layout), options);
     }
 
     /** Link an existing branch to a new, previously absent directory. */
     public Repository addWorktree(Path destination, String name) throws IOException {
+        return addWorktree(destination, name, WorktreeAddOptions.defaults());
+    }
+
+    private Repository addWorktree(Path destination, String name, WorktreeAddOptions options) throws IOException {
+        Objects.requireNonNull(options, "options");
         return change(Lifecycle.Operation.WORKTREE, name, () -> {
             try (var ref = new Lock(layout.ref(name))) {
-                layout.available(name);
                 String tip = layout.require(name);
-                Path dest = destination.toAbsolutePath().normalize();
-                Files.createDirectories(dest.getParent());
-                dest = dest.getParent().toRealPath().resolve(dest.getFileName());
-                if (dest.startsWith(layout.common()) || (layout.root() != null && dest.startsWith(layout.root())))
-                    throw new IOException("Worktrees must be separate directories");
-                var files = snapshot(tip);
-                Files.createDirectory(dest);
-                Path linked = layout.common().resolve("worktrees");
-                Path admin = null;
-                try {
-                    Files.createDirectories(linked);
-                    admin = Files.createTempDirectory(linked, "wt-");
-                    var child = new Layout(dest, admin, layout.common());
-                    Files.writeString(admin.resolve("commondir"), "../..\n");
-                    Files.writeString(admin.resolve("gitdir"), dest.resolve(".git") + "\n");
-                    Files.writeString(child.head(), "ref: refs/heads/" + name + "\n");
-                    Files.write(child.index(), Index.encode(files));
-                    Path gitfile = dest.resolve(".git");
-                    String pointer = "gitdir: " + admin + "\n";
-                    new WorkingTree(dest, db).checkout(Map.of(), files,
-                            () -> Files.writeString(gitfile, pointer, StandardOpenOption.CREATE_NEW));
-                    return new Repository(child, lifecycle, contentMerge);
-                } catch (IOException e) {
-                    if (admin != null) {
-                        try (var paths = Files.list(admin)) { for (Path p : paths.toList()) Files.delete(p); }
-                        Files.delete(admin);
-                    }
-                    try { Files.delete(dest); } catch (IOException cleanup) { e.addSuppressed(cleanup); }
-                    throw e;
-                }
+                Layout child = Worktrees.create(layout, db, destination, name, tip, false, options.isForce());
+                return new Repository(child, lifecycle, contentMerge);
             }
         });
+    }
+
+    /** Create a new branch at {@code HEAD} and check it out in a new linked worktree ({@code git worktree add -b}). */
+    public Repository addWorktreeNewBranch(Path destination, String newBranch) throws IOException {
+        return addWorktreeNewBranch(destination, newBranch, CommitRef.of("HEAD"));
+    }
+
+    /** Create a new branch at {@code startPoint} and check it out in a new linked worktree ({@code git worktree add -b}). */
+    public Repository addWorktreeNewBranch(Path destination, String newBranch, CommitRef startPoint) throws IOException {
+        return change(Lifecycle.Operation.WORKTREE, newBranch, () -> {
+            Branches.checkNew(layout, newBranch);
+            String tip = new Revisions(layout, db).resolveCommit(startPoint);
+            try (var ref = new Lock(layout.ref(newBranch))) {
+                Branches.clearEmptyRefDir(layout, newBranch);
+                Layout child = Worktrees.create(layout, db, destination, newBranch, tip, false, true);
+                ref.publish(tip + "\n");
+                return new Repository(child, lifecycle, contentMerge);
+            }
+        });
+    }
+
+    /** Create a linked worktree with detached {@code HEAD} at {@code target} ({@code git worktree add --detach}). */
+    public Repository addWorktreeDetached(Path destination, CommitRef target) throws IOException {
+        return change(Lifecycle.Operation.WORKTREE, "HEAD", () -> {
+            String tip = new Revisions(layout, db).resolveCommit(target);
+            Layout child = Worktrees.create(layout, db, destination, null, tip, true, false);
+            return new Repository(child, lifecycle, contentMerge);
+        });
+    }
+
+    /** Create a linked worktree with detached {@code HEAD} at a revision string ({@code git worktree add --detach}). */
+    public Repository addWorktreeDetached(Path destination, String revision) throws IOException {
+        return addWorktreeDetached(destination, CommitRef.of(revision));
     }
 
     private Revision revision(String id) throws IOException { return Revision.parse(db.read(id, "commit")); }
