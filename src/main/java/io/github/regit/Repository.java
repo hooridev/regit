@@ -45,6 +45,14 @@ public final class Repository {
         return new Repository(layout, lifecycle, Objects.requireNonNull(strategy));
     }
     public String branch() throws IOException { return layout.current(); }
+    public Branch currentBranch() throws IOException { return new Branch(layout, branch()); }
+
+    /** Look up an existing local branch by its short name. */
+    public Branch branch(String name) throws IOException {
+        layout.require(name);
+        return new Branch(layout, name);
+    }
+
     public Optional<String> head() throws IOException { return Optional.ofNullable(layout.tip(branch())); }
 
     @FunctionalInterface private interface Action<T> { T run() throws IOException; }
@@ -118,7 +126,12 @@ public final class Repository {
         });
     }
     public SortedSet<String> branches() throws IOException { return Branches.names(layout); }
+    public List<Branch> localBranches() throws IOException {
+        return branches().stream().map(name -> new Branch(layout, name)).toList();
+    }
     public List<Path> worktrees() throws IOException { return Worktrees.roots(layout); }
+
+    public void deleteBranch(Branch branch) throws IOException { deleteBranch(branch.nameIn(layout)); }
 
     /** Delete a branch only if its tip is merged into HEAD and no worktree owns it. */
     public void deleteBranch(String name) throws IOException {
@@ -153,16 +166,19 @@ public final class Repository {
             return null;
         });
     }
-    public void createBranch(String name) throws IOException {
-        change(Lifecycle.Operation.BRANCH, name, () -> {
+    public Branch createBranch(String name) throws IOException {
+        return change(Lifecycle.Operation.BRANCH, name, () -> {
             Branches.checkNew(layout, name);
             try (var ref = new Lock(layout.ref(name))) {
                 Branches.prepareNew(layout, name);
                 ref.publish(layout.require(branch()) + "\n");
             }
-            return null;
+            return new Branch(layout, name);
         });
     }
+
+    public void switchBranch(Branch branch) throws IOException { switchBranch(branch.nameIn(layout)); }
+
     public void switchBranch(String name) throws IOException {
         change(Lifecycle.Operation.SWITCH, name, () -> {
             if (branch().equals(name)) return null;
@@ -174,6 +190,10 @@ public final class Repository {
             return null;
         });
     }
+    public Repository addWorktree(Path destination, Branch branch) throws IOException {
+        return addWorktree(destination, branch.nameIn(layout));
+    }
+
     /** Link an existing branch to a new, previously absent directory. */
     public Repository addWorktree(Path destination, String name) throws IOException {
         return change(Lifecycle.Operation.WORKTREE, name, () -> {
@@ -248,9 +268,17 @@ public final class Repository {
         return merge(liveWorktree(source).current(), who, message);
     }
 
+    public String merge(Branch source, Identity who, String message) throws IOException {
+        return merge(source.nameIn(layout), who, message);
+    }
+
     public String merge(String source, Identity who, String message) throws IOException {
         return change(Lifecycle.Operation.MERGE, source, () -> integrate(layout.require(source), who, message, false));
     }
+    public String rebase(Branch onto, Identity who) throws IOException {
+        return rebase(onto.nameIn(layout), who);
+    }
+
     public String rebase(String onto, Identity who) throws IOException {
         return change(Lifecycle.Operation.REBASE, onto, () -> integrate(layout.require(onto), who, "", true));
     }

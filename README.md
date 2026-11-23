@@ -23,20 +23,21 @@ Files.writeString(Path.of("project/README.md"), "First version\n");
 main.stage("README.md");
 main.commit("Start project\n", author, author);
 
-var branch = "agent/docs";
+var branch = main.createBranch("agent/docs");
 var checkout = Path.of("docs-checkout");
-main.createBranch(branch);
 var agent = main.addWorktree(checkout, branch);
 Files.writeString(checkout.resolve("README.md"), "Updated version\n");
 agent.stage("README.md");
 String tip = agent.commit("Update documentation\n", author, author);
 
-main.merge(agent, author, "Merge documentation\n");
+main.merge(branch, author, "Merge documentation\n");
 main.removeWorktree(agent);
 main.deleteBranch(branch);
 ```
 
 `Repository.open(path)` reopens a worktree or bare repository. `branches()`, `branch()`, `head()` and `worktrees()` expose its current state. An unborn branch has an empty head. A linked checkout has its own HEAD, index and operation lock. Different agents can commit concurrently on separate branches. Branch deletion checks reachability from the current HEAD and checkout ownership.
+
+A `Branch` identifies a local ref by repository and name. Obtain one from `createBranch(name)`, `currentBranch()`, `branch(name)` or `localBranches()`. All worktrees of the repository can use it. `merge(branch, ...)` follows that named ref, while `merge(agent, ...)` follows the branch currently checked out by the agent. Deleting and recreating a branch under the same name makes an existing handle refer to the recreated ref.
 
 Stage exact repository-relative file names. Staging a missing tracked file records deletion. Commits consume the index and store the supplied message verbatim. Include the trailing newline for parity with an ordinary `git commit -m`. The author and committer carry explicit timestamps and numeric UTC offsets.
 

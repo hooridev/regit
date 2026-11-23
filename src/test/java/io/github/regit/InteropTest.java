@@ -90,6 +90,33 @@ class InteropTest {
         assertEquals("a/nested\n\"\\303\\266\"", git(root, "ls-files"));
         git(root, "fsck", "--strict");
     }
+    @Test void branchHandlesAreSharedAcrossWorktreesAndScopedToTheirRepository() throws Exception {
+        Branch main = repo.currentBranch();
+        assertEquals("main", main.name());
+        commit("base", "seed", "base");
+        Branch topic = repo.createBranch("agent/docs");
+        assertEquals(List.of(topic, main), repo.localBranches());
+        assertEquals(topic, Repository.open(root).branch(topic.name()));
+
+        Path checkout = tmp.resolve("docs");
+        var agent = repo.addWorktree(checkout, topic);
+        assertEquals(topic, agent.currentBranch());
+        Files.writeString(checkout.resolve("base"), "edited");
+        agent.stage("base");
+        String tip = agent.commit("edit\n", WHO, WHO);
+        assertEquals(tip, agent.rebase(main, WHO));
+        Branch other = repo.createBranch("other");
+        agent.switchBranch(other);
+        assertEquals(tip, repo.merge(topic, WHO, "merge\n"));
+        repo.removeWorktree(agent);
+
+        var foreign = Repository.init(tmp.resolve("foreign"), topic.name()).currentBranch();
+        assertNotEquals(topic, foreign);
+        assertThrows(IOException.class, () -> repo.deleteBranch(foreign));
+        repo.deleteBranch(topic);
+        assertThrows(IOException.class, () -> repo.merge(topic, WHO, "missing\n"));
+    }
+
     @Test void worktreeArgumentsFollowTheBranchAndRejectForeignOrReplacedCheckouts() throws Exception {
         commit("base", "seed", "base");
         repo.createBranch("topic");
