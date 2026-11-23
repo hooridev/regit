@@ -27,8 +27,7 @@ final class Worktrees {
     }
 
     /** Remove only a clean linked checkout; never recursively delete the working directory. */
-    static void remove(Layout owner, Path destination, ObjectsDb db) throws IOException {
-        Layout child = Layout.open(destination);
+    static void remove(Layout owner, Layout child, ObjectsDb db) throws IOException {
         if (!child.common().equals(owner.common()) || !child.admin().getParent().equals(owner.common().resolve("worktrees"))
                 || child.root() == null || child.admin().equals(owner.admin())
                 || !child.admin().resolve(line(child.admin().resolve("gitdir"))).normalize().equals(child.root().resolve(".git")))

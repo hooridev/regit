@@ -23,15 +23,17 @@ Files.writeString(Path.of("project/README.md"), "First version\n");
 main.stage("README.md");
 main.commit("Start project\n", author, author);
 
-main.createBranch("agent/docs");
-var agent = main.addWorktree(Path.of("docs-checkout"), "agent/docs");
-Files.writeString(Path.of("docs-checkout/README.md"), "Updated version\n");
+var branch = "agent/docs";
+var checkout = Path.of("docs-checkout");
+main.createBranch(branch);
+var agent = main.addWorktree(checkout, branch);
+Files.writeString(checkout.resolve("README.md"), "Updated version\n");
 agent.stage("README.md");
 String tip = agent.commit("Update documentation\n", author, author);
 
-main.merge("agent/docs", author, "Merge documentation\n");
-main.removeWorktree(Path.of("docs-checkout"));
-main.deleteBranch("agent/docs");
+main.merge(agent, author, "Merge documentation\n");
+main.removeWorktree(agent);
+main.deleteBranch(branch);
 ```
 
 `Repository.open(path)` reopens a worktree or bare repository. `branches()`, `branch()`, `head()` and `worktrees()` expose its current state. An unborn branch has an empty head. A linked checkout has its own HEAD, index and operation lock. Different agents can commit concurrently on separate branches. Branch deletion checks reachability from the current HEAD and checkout ownership.

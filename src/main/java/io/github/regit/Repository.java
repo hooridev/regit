@@ -130,8 +130,26 @@ public final class Repository {
     }
     /** Remove a clean linked checkout, keeping its branch. Call on another repository handle. */
     public void removeWorktree(Path destination) throws IOException {
+        removeWorktree(destination, () -> Layout.open(destination));
+    }
+
+    /** Remove the clean linked checkout represented by this handle, keeping its branch. */
+    public void removeWorktree(Repository worktree) throws IOException {
+        if (worktree.isBare()) throw new IOException("Expected a worktree");
+        removeWorktree(worktree.layout.root(), () -> liveWorktree(worktree));
+    }
+
+    private Layout liveWorktree(Repository worktree) throws IOException {
+        Layout expected = worktree.layout;
+        if (expected.root() == null || !expected.common().equals(layout.common()))
+            throw new IOException("Expected a worktree of this repository");
+        if (!Layout.open(expected.root()).equals(expected)) throw new IOException("Worktree was replaced");
+        return expected;
+    }
+
+    private void removeWorktree(Path destination, Action<Layout> resolve) throws IOException {
         change(Lifecycle.Operation.REMOVE_WORKTREE, destination.toString(), () -> {
-            Worktrees.remove(layout, destination, db);
+            Worktrees.remove(layout, resolve.run(), db);
             return null;
         });
     }
@@ -223,6 +241,11 @@ public final class Repository {
                 }
             });
         }
+    }
+
+    /** Merge the currently checked-out branch of another worktree in this repository. */
+    public String merge(Repository source, Identity who, String message) throws IOException {
+        return merge(liveWorktree(source).current(), who, message);
     }
 
     public String merge(String source, Identity who, String message) throws IOException {

@@ -90,6 +90,29 @@ class InteropTest {
         assertEquals("a/nested\n\"\\303\\266\"", git(root, "ls-files"));
         git(root, "fsck", "--strict");
     }
+    @Test void worktreeArgumentsFollowTheBranchAndRejectForeignOrReplacedCheckouts() throws Exception {
+        commit("base", "seed", "base");
+        repo.createBranch("topic");
+        repo.createBranch("next");
+        Path location = tmp.resolve("checkout");
+        Repository agent = repo.addWorktree(location, "topic");
+        agent.switchBranch("next");
+        Files.writeString(location.resolve("base"), "updated");
+        assertThrows(IOException.class, () -> repo.removeWorktree(agent));
+        agent.stage("base");
+        String tip = agent.commit("change\n", WHO, WHO);
+        assertEquals(tip, repo.merge(agent, WHO, "merge\n"));
+
+        Repository foreign = Repository.init(tmp.resolve("foreign"), "next");
+        assertThrows(IOException.class, () -> repo.merge(foreign, WHO, "merge\n"));
+        assertThrows(IOException.class, () -> repo.removeWorktree(foreign));
+        repo.removeWorktree(Repository.open(location));
+        Repository replacement = repo.addWorktree(location, "topic");
+        assertThrows(IOException.class, () -> repo.merge(agent, WHO, "merge\n"));
+        assertThrows(IOException.class, () -> repo.removeWorktree(agent));
+        assertEquals("topic", replacement.branch());
+    }
+
     @Test void separateIndexesAndRefOwnership() throws Exception {
         String base = commit("base", "seed", "base");
         repo.createBranch("agent/task");
