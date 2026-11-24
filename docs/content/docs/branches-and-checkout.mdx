@@ -15,7 +15,7 @@ Optional<Branch> current = repo.currentBranchOptional();
 Branch feat = repo.createBranch("feat/search");
 
 // Create a branch at any CommitRef (Commit, Branch, RemoteBranch)
-Commit base = repo.commit("HEAD~2");
+Commit base = repo.getCommit("HEAD~2");
 Branch hotfix = repo.createBranch("hotfix/null-check", base);
 
 // Move or create an unchecked-out branch (`git branch -f`)
@@ -60,7 +60,7 @@ List<Branch> merged   = repo.mergedBranches(main);   // --merged main
 List<Branch> unmerged = repo.unmergedBranches(main); // --no-merged main
 
 // Which branches contain a specific commit?
-Commit bugfix = repo.commit("HEAD~3");
+Commit bugfix = repo.getCommit("HEAD~3");
 List<Branch> withFix = repo.branchesContaining(bugfix); // --contains <commit>
 ```
 
@@ -84,7 +84,7 @@ repo.checkoutResetBranch("feat/cache", main);
 `regit` supports detached HEAD as a first-class state across `status()`, `stage()`, `commit()`, and `switchBranch()`:
 
 ```java title="DetachedHead.java"
-Commit snapshot = repo.commit("v1.0");
+Commit snapshot = repo.getCommit("v1.0");
 
 // Check out commit in detached HEAD mode
 Commit checkedOut = repo.checkoutDetached(snapshot);
@@ -104,7 +104,7 @@ Branch saved = repo.checkoutNewBranch("feat/experiment", experiment);
 ### Restoring Individual Files (`git checkout <rev> -- <paths>`)
 
 ```java title="CheckoutFiles.java"
-Commit previous = repo.commit("HEAD~1");
+Commit previous = repo.getCommit("HEAD~1");
 
 // Restores file contents from previous into BOTH the index and the working tree
 repo.checkoutFiles(previous, Path.of("pom.xml"), Path.of("src/main/Config.java"));

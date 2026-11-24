@@ -70,7 +70,7 @@ DiffOptions options = DiffOptions.defaults()
     .filter(FileDiff.Change.MODIFIED, FileDiff.Change.RENAMED) // --diff-filter=MR
     .paths(Path.of("src/main"));                               // -- src/main
 
-Diff filtered = repo.diff(repo.commit("HEAD~5"), repo.headCommit().orElseThrow(), options);
+Diff filtered = repo.diff(repo.getCommit("HEAD~5"), repo.headCommit().orElseThrow(), options);
 
 for (FileDiff file : filtered.files()) {
     if (file.change() == FileDiff.Change.RENAMED) {

@@ -37,24 +37,24 @@ The snippet below initializes a repository, creates an initial commit, isolates 
 ```java title="Quickstart.java"
 import io.github.regit.*;
 import java.nio.file.*;
-import java.time.OffsetDateTime;
 
 Path repoDir = Path.of("my-project");
-var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
 
-// 1. Initialize repository and create the first commit
-Repository mainRepo = Repository.init(repoDir, "main");
+// 1. Initialize repository ("main" by default) with a default author
+Repository mainRepo = Repository.init(repoDir)
+    .withAuthor("Alix", "alix@example.org");
+
 Files.writeString(repoDir.resolve("README.md"), "# My Project\n");
 mainRepo.stageAll();
-Commit initial = mainRepo.commit("feat: initial commit\n", author);
+Commit initial = mainRepo.commit("feat: initial commit\n");
 
-// 2. Create an isolated worktree for a task or agent
+// 2. Create an isolated worktree (inherits withAuthor automatically)
 Path featureDir = Path.of("my-project-docs");
 Repository agent = mainRepo.addWorktreeNewBranch(featureDir, "agent/docs", initial);
 
 Files.writeString(featureDir.resolve("README.md"), "# My Project\n\nWith documentation.\n");
 agent.stageAll();
-Commit docsCommit = agent.commit("docs: update README\n", author);
+Commit docsCommit = agent.commit("docs: update README\n");
 
 // 3. Inspect the diff between commits
 Diff diff = mainRepo.diff(initial, docsCommit);
@@ -62,17 +62,16 @@ System.out.println(diff.formatStat());
 System.out.println(diff.formatPatch());
 
 // 4. Merge back into main and clean up worktree & branch
-Branch docsBranch = mainRepo.branch("agent/docs");
-mainRepo.merge(docsBranch, author, "merge: integrate docs\n", MergeOptions.defaults().noFastForward());
+MergeResult merged = mainRepo.merge(agent);
 mainRepo.removeWorktree(agent);
-mainRepo.deleteBranch(docsBranch);
+mainRepo.deleteBranch("agent/docs");
 ```
 
 ## The `CommitRef` Model
 
 Many Git operations accept any target that resolves to a commit. In `regit`, those types share the sealed interface `CommitRef`:
 
-- `Commit` — immutable commit snapshot (returned by `headCommit()`, `commit(...)`, `log(...)`, etc.)
+- `Commit` — immutable commit snapshot (returned by `headCommit()`, `getCommit(...)`, `commit(...)`, `log(...)`, etc.)
 - `Branch` — repository-scoped local branch handle that always resolves to its live tip
 - `RemoteBranch` — remote-tracking branch handle (e.g. `origin/main`)
 - `CommitRef.of("HEAD~2")` — arbitrary Git revision expressions (`v1.0`, `HEAD^2`, short SHAs)
@@ -80,7 +79,7 @@ Many Git operations accept any target that resolves to a commit. In `regit`, tho
 ```java title="CommitRefExample.java"
 Branch main = repo.branch("main");
 RemoteBranch originMain = repo.remoteBranch("origin", "main");
-Commit release = repo.commit("v1.0");
+Commit release = repo.getCommit("v1.0");
 
 // Mix and match objects directly without string conversions
 boolean merged = repo.isAncestor(release, main);

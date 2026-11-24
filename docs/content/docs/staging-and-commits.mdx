@@ -8,6 +8,11 @@ description: Inspect working tree status, stage files with -A/-u/-N, and create 
 `repo.status()` returns a structured `Status` record with staged, unstaged, and untracked paths in Git's canonical byte order. Worktree `.gitignore` files and `.git/info/exclude` are evaluated automatically.
 
 ```java title="CheckStatus.java"
+// Quick clean check (includes staged, unstaged, untracked, and conflicted paths)
+if (repo.isClean()) {
+    System.out.println("Nothing to commit, working tree clean.");
+}
+
 Status status = repo.status();
 
 // Staged (Index vs. HEAD)
@@ -85,19 +90,20 @@ repo.stageIntentToAdd(Path.of("docs/notes.md"));
 
 ## Creating Commits (`git commit`)
 
-Pass a single `Identity` to use the same person as both author and committer — or pass `(author, committer)` explicitly when they differ (e.g. a CI bot committing on behalf of a developer).
+Configure a default identity once via `repo.withAuthor("Alix", "alix@example.org")` — or pass an explicit `Identity` (using `Identity.now(name, email)` or a fixed timestamp) per call. Pass `(author, committer)` only when author and committer differ.
 
 ```java title="BasicCommit.java"
 import io.github.regit.*;
-import java.time.OffsetDateTime;
 
-var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
+Repository authored = repo.withAuthor("Alix", "alix@example.org");
 
-repo.stageAll();
-Commit created = repo.commit(
-    "feat(api): add search endpoint\n\nIncludes pagination and filtering.\n",
-    author
+authored.stageAll();
+Commit created = authored.commit(
+    "feat(api): add search endpoint\n\nIncludes pagination and filtering.\n"
 );
+
+// Or pass an explicit Identity without withAuthor(...)
+Commit explicit = repo.commit("chore: update config\n", Identity.now("Alix", "alix@example.org"));
 
 System.out.println("Created commit: " + created.shortId());
 ```
@@ -105,8 +111,8 @@ System.out.println("Created commit: " + created.shortId());
 ### Common Commit Workflows (`-a`, `--amend`, `--no-edit`, `--fixup`)
 
 ```java title="CommitVariants.java"
-var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
-var committer = new Identity("CI Bot", "ci@example.org", OffsetDateTime.now());
+var author = Identity.now("Alix", "alix@example.org");
+var committer = Identity.now("CI Bot", "ci@example.org");
 
 // 1. Auto-stage modified/deleted tracked files and commit (`git commit -a -m ...`)
 Commit c1 = repo.commitAll("fix: handle null input\n", author);
@@ -119,7 +125,7 @@ repo.stage("src/ParserTest.java");
 Commit c3 = repo.amendNoEdit(committer);
 
 // 4. Create a fixup! commit for later `rebase --autosquash` (`git commit --fixup=<commit>`)
-Commit target = repo.commit("HEAD~2");
+Commit target = repo.getCommit("HEAD~2");
 Commit fixup = repo.fixup(target, author);
 // Produces exact message: "fixup! <subject of target>\n"
 

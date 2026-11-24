@@ -27,7 +27,7 @@ Repository agent = mainRepo.addWorktree(Path.of("/tmp/wt-refactor"), topic);
   <Tab value="Detached HEAD (--detach)">
 ```java title="WorktreeDetached.java"
 // Ideal for read-only analysis, builds, or test runs pinned to a specific commit or tag
-Commit release = mainRepo.commit("v1.0");
+Commit release = mainRepo.getCommit("v1.0");
 Repository buildWt = mainRepo.addWorktreeDetached(Path.of("/tmp/wt-build"), release);
 ```
   </Tab>
@@ -81,11 +81,10 @@ Because each worktree owns its own index and operation lock, agents can commit i
 ```java title="ParallelAgents.java"
 import io.github.regit.*;
 import java.nio.file.*;
-import java.time.OffsetDateTime;
 import java.util.concurrent.Executors;
 
-var author = new Identity("Agent", "agent@example.org", OffsetDateTime.now());
-Repository mainRepo = Repository.open(Path.of("project"));
+Repository mainRepo = Repository.open(Path.of("project"))
+    .withAuthor("Agent", "agent@example.org");
 
 Path dirA = Path.of("wt-agent-a");
 Path dirB = Path.of("wt-agent-b");
@@ -96,21 +95,21 @@ try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
     var taskA = executor.submit(() -> {
         Files.writeString(dirA.resolve("Api.java"), "public interface Api {}\n");
         agentA.stageAll();
-        return agentA.commit("feat: add Api\n", author);
+        return agentA.commit("feat: add Api\n");
     });
     var taskB = executor.submit(() -> {
         Files.writeString(dirB.resolve("GUIDE.md"), "# Guide\n");
         agentB.stageAll();
-        return agentB.commit("docs: add Guide\n", author);
+        return agentB.commit("docs: add Guide\n");
     });
 
     taskA.get();
     taskB.get();
 }
 
-// Merge directly by passing the agent's Repository handle
-mainRepo.merge(agentA, author, "merge: agent/api\n");
-mainRepo.merge(agentB, author, "merge: agent/docs\n");
+// Merge directly by passing each agent's Repository handle
+mainRepo.merge(agentA);
+mainRepo.merge(agentB);
 
 // Clean up worktrees and branches
 mainRepo.removeWorktree(agentA);

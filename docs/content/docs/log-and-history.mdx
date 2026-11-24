@@ -14,10 +14,10 @@ List<Commit> all = repo.log();
 // Latest 10 commits (`git log -10`)
 List<Commit> recent = repo.log(10);
 
-// Starting from a Branch, RemoteBranch, or Commit
+// Starting from any CommitRef (Branch, RemoteBranch, Commit)
 List<Commit> branchLog  = repo.log(repo.branch("main"), 20);
 List<Commit> remoteLog  = repo.log(repo.remoteBranch("origin", "main"), 5);
-List<Commit> fromCommit = repo.log(repo.commit("v1.0"), 10);
+List<Commit> fromCommit = repo.log(repo.getCommit("v1.0"), 10);
 
 // Oneline formatting (`git log --oneline -10`)
 for (Commit c : repo.log(10)) {
@@ -120,7 +120,7 @@ for (LineLogEntry step : evolution) {
 }
 
 // Or start from an explicit CommitRef
-List<LineLogEntry> fromRelease = repo.logLines(repo.commit("v1.0"), "src/Parser.java", 1, 20);
+List<LineLogEntry> fromRelease = repo.logLines(repo.getCommit("v1.0"), "src/Parser.java", 1, 20);
 ```
 
 ## Merge-Base & Ancestry (`git merge-base`)
@@ -128,7 +128,7 @@ List<LineLogEntry> fromRelease = repo.logLines(repo.commit("v1.0"), "src/Parser.
 ```java title="MergeBaseExample.java"
 Branch main = repo.branch("main");
 Branch topic = repo.branch("topic");
-Commit release = repo.commit("v1.0");
+Commit release = repo.getCommit("v1.0");
 
 // Check whether release is already an ancestor of main (`git merge-base --is-ancestor`)
 boolean containsRelease = repo.isAncestor(release, main);

@@ -16,6 +16,11 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
         untracked = Collections.unmodifiableSortedSet(new TreeSet<>(untracked));
     }
 
+    /** True when there are no staged, unstaged, or untracked paths. */
+    public boolean isClean() {
+        return staged.isEmpty() && unstaged.isEmpty() && untracked.isEmpty();
+    }
+
     static Status scan(Layout layout, WorkingTree work, Map<String, Entry> head, List<Index.EntryRecord> rawIndex)
             throws IOException {
         var index = new TreeMap<String, Index.EntryRecord>(Entry.BYTE_ORDER);

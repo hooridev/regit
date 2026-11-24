@@ -134,7 +134,7 @@ class LogTest {
         assertEquals(List.of(c5, c4, c3, c2, c1), ids(log));
         assertEquals(gitLogIds(dir), ids(log));
 
-        Commit first = repo.commit(c1);
+        Commit first = repo.getCommit(c1);
         assertEquals(c1, first.id());
         assertEquals(c1.substring(0, 7), first.shortId());
         assertEquals(git(dir, Map.of(), "rev-parse", c1 + "^{tree}").strip(), first.tree());
@@ -154,9 +154,9 @@ class LogTest {
             String expected = "S[" + c.subject() + "]B[" + c.body() + "]E\n";
             assertEquals(nativeOut, expected, "Subject/body mismatch on " + c.id());
         }
-        assertEquals("Ümlaut café", repo.commit(c4).subject());
-        assertEquals("Signed commit", repo.commit(c5).subject());
-        assertEquals("Signer", repo.commit(c5).author().name());
+        assertEquals("Ümlaut café", repo.getCommit(c4).subject());
+        assertEquals("Signed commit", repo.getCommit(c5).subject());
+        assertEquals("Signer", repo.getCommit(c5).author().name());
     }
 
     @Test void revisionsTagsPackedObjectsDetachedHeadAndWorktrees() throws Exception {
@@ -185,22 +185,22 @@ class LogTest {
 
         Repository repo = Repository.open(dir);
         assertEquals(merge, repo.headCommit().orElseThrow().id());
-        assertEquals(merge, repo.commit("HEAD").id());
-        assertEquals(merge, repo.commit("main").id());
-        assertEquals(merge, repo.commit(repo.branch("main")).id());
-        assertEquals(merge, repo.commit("refs/heads/main").id());
-        assertEquals(c1, repo.commit("v1-light").id());
-        assertEquals(c2, repo.commit("v2-annotated").id());
-        assertEquals(c2, repo.commit("v2-annotated^{commit}").id());
-        assertEquals(c2, repo.commit("v2-annotated^0").id());
-        assertEquals(c3, repo.commit("origin/main").id());
-        assertEquals(c3, repo.commit("HEAD^").id());
-        assertEquals(s1, repo.commit("HEAD^2").id());
-        assertEquals(c2, repo.commit("HEAD^2~1").id());
-        assertEquals(c1, repo.commit("HEAD~3").id());
-        assertEquals(merge, repo.commit("HEAD~0").id());
-        assertEquals(c2, repo.commit(c2.substring(0, 7)).id());
-        assertEquals(c2, repo.commit(c2.substring(0, 10).toUpperCase(Locale.ROOT)).id());
+        assertEquals(merge, repo.getCommit("HEAD").id());
+        assertEquals(merge, repo.getCommit("main").id());
+        assertEquals(merge, repo.getCommit(repo.branch("main")).id());
+        assertEquals(merge, repo.getCommit("refs/heads/main").id());
+        assertEquals(c1, repo.getCommit("v1-light").id());
+        assertEquals(c2, repo.getCommit("v2-annotated").id());
+        assertEquals(c2, repo.getCommit("v2-annotated^{commit}").id());
+        assertEquals(c2, repo.getCommit("v2-annotated^0").id());
+        assertEquals(c3, repo.getCommit("origin/main").id());
+        assertEquals(c3, repo.getCommit("HEAD^").id());
+        assertEquals(s1, repo.getCommit("HEAD^2").id());
+        assertEquals(c2, repo.getCommit("HEAD^2~1").id());
+        assertEquals(c1, repo.getCommit("HEAD~3").id());
+        assertEquals(merge, repo.getCommit("HEAD~0").id());
+        assertEquals(c2, repo.getCommit(c2.substring(0, 7)).id());
+        assertEquals(c2, repo.getCommit(c2.substring(0, 10).toUpperCase(Locale.ROOT)).id());
 
         assertEquals(gitLogIds(dir, "v2-annotated"), ids(repo.log("v2-annotated")));
         assertEquals(gitLogIds(dir, "--tags"), ids(repo.log(Log.tags())));
@@ -225,13 +225,13 @@ class LogTest {
 
         // Error handling & foreign branch isolation
         Branch foreign = Repository.init(tmp.resolve("foreign"), "main").currentBranch();
-        assertThrows(IOException.class, () -> repo.commit(foreign));
+        assertThrows(IOException.class, () -> repo.getCommit(foreign));
         assertThrows(IOException.class, () -> repo.log(foreign));
         assertThrows(IOException.class, () -> repo.log(Log.range(foreign, repo.branch("main"))));
         assertThrows(IOException.class, () -> repo.log(Log.symmetricRange(foreign, repo.branch("main"))));
-        assertThrows(IOException.class, () -> repo.commit("nonexistent-ref"));
-        assertThrows(IOException.class, () -> repo.commit(blobId));
-        assertThrows(IOException.class, () -> repo.commit("HEAD^3"));
+        assertThrows(IOException.class, () -> repo.getCommit("nonexistent-ref"));
+        assertThrows(IOException.class, () -> repo.getCommit(blobId));
+        assertThrows(IOException.class, () -> repo.getCommit("HEAD^3"));
         assertThrows(IllegalArgumentException.class, () -> repo.log(-1));
         assertThrows(IllegalArgumentException.class, () -> Log.of().skip(-1));
     }
@@ -274,8 +274,8 @@ class LogTest {
         git(dir, timeEnv(1700000700, 1700000700), "merge", "--no-ff", "-m", "merge-c", "branch-c");
 
         Repository repo = Repository.open(dir);
-        assertEquals(3, repo.commit(octopus).parents().size());
-        assertTrue(repo.commit(octopus).isMerge());
+        assertEquals(3, repo.getCommit(octopus).parents().size());
+        assertTrue(repo.getCommit(octopus).isMerge());
 
         // Ordering modes
         assertEquals(gitLogIds(dir), ids(repo.log()));
@@ -472,9 +472,9 @@ class LogTest {
         Repository repo = Repository.open(dir);
         Branch main = repo.branch("main");
         Branch topic = repo.branch("topic");
-        Commit mainTip = repo.commit(main);
-        Commit mainParent = repo.commit("main~1");
-        Commit topicTip = repo.commit(topic);
+        Commit mainTip = repo.getCommit(main);
+        Commit mainParent = repo.getCommit("main~1");
+        Commit topicTip = repo.getCommit(topic);
 
         // Commit overloads on Repository & Log
         assertEquals(gitLogIds(dir, mainParent.id()), ids(repo.log(mainParent)));

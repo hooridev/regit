@@ -104,10 +104,10 @@ class InteropTest {
         Files.writeString(checkout.resolve("base"), "edited");
         agent.stage("base");
         String tip = agent.commit("edit\n", WHO, WHO).id();
-        assertEquals(tip, agent.rebase(main, WHO));
+        assertEquals(tip, agent.rebase(main, WHO).head().orElseThrow().id());
         Branch other = repo.createBranch("other");
         agent.switchBranch(other);
-        assertEquals(tip, repo.merge(topic, WHO, "merge\n"));
+        assertEquals(tip, repo.merge(topic, WHO, "merge\n").commit().orElseThrow().id());
         repo.removeWorktree(agent);
 
         var foreign = Repository.init(tmp.resolve("foreign"), topic.name()).currentBranch();
@@ -128,7 +128,7 @@ class InteropTest {
         assertThrows(IOException.class, () -> repo.removeWorktree(agent));
         agent.stage("base");
         String tip = agent.commit("change\n", WHO, WHO).id();
-        assertEquals(tip, repo.merge(agent, WHO, "merge\n"));
+        assertEquals(tip, repo.merge(agent, WHO, "merge\n").commit().orElseThrow().id());
 
         Repository foreign = Repository.init(tmp.resolve("foreign"), "next");
         assertThrows(IOException.class, () -> repo.merge(foreign, WHO, "merge\n"));
@@ -154,7 +154,7 @@ class InteropTest {
         assertEquals("M  base", git(child, "status", "--porcelain"));
         String tip = topic.commit("topic\n", WHO, WHO).id();
         assertEquals(base, repo.head().orElseThrow());
-        assertEquals(tip, repo.merge("agent/task", WHO, "merge\n"));
+        assertEquals(tip, repo.merge("agent/task", WHO, "merge\n").commit().orElseThrow().id());
         assertEquals("changed", Files.readString(root.resolve("base")));
     }
     @Test void mergeAndRebaseMatchIndependentGitResults() throws Exception {
@@ -166,7 +166,7 @@ class InteropTest {
         String main = commit("shared", "a\nb\nc\nd\nE\n", "bottom");
         git(root, "branch", "native-merge");
         git(root, "branch", "native-rebase", "topic");
-        String merge = repo.merge("topic", WHO, "both\n");
+        String merge = repo.merge("topic", WHO, "both\n").commit().orElseThrow().id();
         assertEquals("A\nb\nc\nd\nE\n", Files.readString(root.resolve("shared")));
         assertEquals(main + " " + topic, git(root, "show", "-s", "--format=%P", merge));
         git(root, "switch", "native-merge");
@@ -174,7 +174,7 @@ class InteropTest {
         assertEquals(merge, git(root, "rev-parse", "HEAD"));
         git(root, "branch", "onto", main);
         repo.switchBranch("topic");
-        String rebased = repo.rebase("onto", WHO);
+        String rebased = repo.rebase("onto", WHO).head().orElseThrow().id();
         git(root, "switch", "native-rebase");
         git(root, "rebase", "onto");
         assertEquals(rebased, git(root, "rev-parse", "HEAD"));

@@ -9,14 +9,16 @@ description: Create and open repositories, resolve revisions, and read blobs and
 import io.github.regit.Repository;
 import java.nio.file.Path;
 
-// Create a new working-tree repository with initial branch "main"
-Repository repo = Repository.init(Path.of("/tmp/demo"), "main");
+// Create a new working-tree repository (default branch "main", or specify explicitly)
+Repository repo = Repository.init(Path.of("/tmp/demo"));
+Repository custom = Repository.init(Path.of("/tmp/demo-dev"), "develop");
 
-// Create a bare repository (e.g. for a central remote or HTTP host)
-Repository bare = Repository.initBare(Path.of("/tmp/central.git"), "main");
+// Create a bare repository (default branch "main")
+Repository bare = Repository.initBare(Path.of("/tmp/central.git"));
 
 // Open an existing working tree, linked worktree, or bare repository
-Repository opened = Repository.open(Path.of("/tmp/demo"));
+Repository opened = Repository.open(Path.of("/tmp/demo"))
+    .withAuthor("Alix", "alix@example.org"); // optional default identity for commits/merges/rebases
 boolean isBare = opened.isBare();
 ```
 
@@ -63,9 +65,9 @@ String short7  = repo.shortId("HEAD");
 String short10 = repo.shortId(repo.currentBranch(), 10);
 
 // Load a Commit object directly
-Commit head      = repo.commit("HEAD");
-Commit tagCommit = repo.commit("v1.2.0");
-Commit branchTip = repo.commit(repo.branch("main"));
+Commit head      = repo.getCommit("HEAD");
+Commit tagCommit = repo.getCommit("v1.2.0");
+Commit branchTip = repo.getCommit(repo.branch("main"));
 
 System.out.printf("%s %s (%s)%n", head.shortId(), head.subject(), head.author().name());
 ```
@@ -78,7 +80,7 @@ Use `showText(...)`, `showBlob(...)`, and `listTree(...)` to inspect historical 
   <Tab value="Object-Oriented (Commit / Branch)">
 ```java title="ShowWithObjects.java"
 Branch main = repo.branch("main");
-Commit previous = repo.commit("HEAD~1");
+Commit previous = repo.getCommit("HEAD~1");
 
 // Read UTF-8 text from a Branch or Commit
 String currentPom = repo.showText(main, "pom.xml");

@@ -56,17 +56,16 @@ Repository smartRepo = repo.withContentMerge((path, base, current, incoming) -> 
 A common agent and CI workflow: fetch `origin` with pruning, fold all `fixup!` commits onto `origin/main`, generate a diff summary, and push safely with `--force-with-lease`.
 
 ```java title="PreparePullRequest.java"
-Remote origin = repo.remote("origin");
-var committer = new Identity("Dev Agent", "agent@example.org", OffsetDateTime.now());
+Repository authored = repo.withAuthor("Dev Agent", "agent@example.org");
+Remote origin = authored.remote("origin");
 
 // 1. Update remote-tracking refs & prune stale branches
-repo.fetch(origin, FetchOptions.defaults().prune());
-RemoteBranch originMain = repo.remoteBranch("origin", "main");
+authored.fetch(origin, FetchOptions.defaults().prune());
+RemoteBranch originMain = authored.remoteBranch("origin", "main");
 
 // 2. Rebase current feature branch onto origin/main with --autosquash
-RebaseResult rebased = repo.rebase(
+RebaseResult rebased = authored.rebase(
     originMain,
-    committer,
     RebaseOptions.defaults().autosquash().allowConflicts()
 );
 if (rebased.isConflicted()) {
@@ -74,11 +73,11 @@ if (rebased.isConflicted()) {
 }
 
 // 3. Summarize changes for the PR description
-Diff prDiff = repo.diff(originMain, repo.currentBranch(), DiffOptions.defaults().detectRenames());
+Diff prDiff = authored.diff(originMain, authored.currentBranch(), DiffOptions.defaults().detectRenames());
 System.out.println("PR scope: " + prDiff.formatShortStat());
 
 // 4. Push safely (fails if someone else updated the remote branch)
-repo.push(origin, PushOptions.defaults().forceWithLease().setUpstream());
+authored.push(origin, PushOptions.defaults().forceWithLease().setUpstream());
 ```
 
 ### Recipe 2: Clean Up All Merged Feature Branches
@@ -96,7 +95,7 @@ for (Branch b : repo.mergedBranches(main)) {
 ### Recipe 3: Generate Release Notes Between Tags
 
 ```java title="ReleaseNotesGenerator.java"
-Commit lastRelease = repo.commit("v1.0.0");
+Commit lastRelease = repo.getCommit("v1.0.0");
 Branch main = repo.branch("main");
 
 List<CommitDiff> changes = repo.logWithDiff(
@@ -116,13 +115,7 @@ for (CommitDiff item : changes) {
 ### Recipe 4: Guard Against a Dirty Working Tree
 
 ```java title="CheckDirtyState.java"
-Status st = repo.status();
-boolean dirty = !st.staged().isEmpty()
-    || !st.unstaged().isEmpty()
-    || !st.untracked().isEmpty()
-    || !repo.conflictedFiles().isEmpty();
-
-if (dirty) {
+if (!repo.isClean()) {
     System.out.println("Working tree is not clean:");
     System.out.println(repo.diff().formatStat());
 }

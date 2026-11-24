@@ -53,7 +53,7 @@ class RevParseAndShowTest {
         assertEquals(git(root, "rev-parse", "--short=4", "HEAD"), repo.shortId("HEAD", 4));
         assertEquals(git(root, "rev-parse", "--short=2", "HEAD"), repo.shortId("HEAD", 2));
         assertEquals(git(root, "rev-parse", "--short=12", "HEAD"), repo.shortId(repo.currentBranch(), 12));
-        assertEquals(git(root, "rev-parse", "--short", c1), repo.shortId(repo.commit(c1)));
+        assertEquals(git(root, "rev-parse", "--short", c1), repo.shortId(repo.getCommit(c1)));
 
         // Linked worktree: --show-toplevel differs from main, --git-common-dir matches main
         Branch topic = repo.createBranch("topic");
@@ -98,9 +98,9 @@ class RevParseAndShowTest {
         repo.switchBranch("main");
 
         Branch main = repo.branch("main");
-        Commit baseCommit = repo.commit(base);
-        Commit mainCommit = repo.commit(main);
-        Commit topicCommit = repo.commit(topic);
+        Commit baseCommit = repo.getCommit(base);
+        Commit mainCommit = repo.getCommit(main);
+        Commit topicCommit = repo.getCommit(topic);
 
         // --is-ancestor with Branch, Commit, CommitRef.of, String
         assertTrue(repo.isAncestor(baseCommit, main));

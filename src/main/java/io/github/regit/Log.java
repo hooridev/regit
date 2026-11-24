@@ -107,6 +107,9 @@ public final class Log {
     /** Start from one or more remote-tracking branches. */
     public static Log from(RemoteBranch... branches) { return EMPTY.include(branches); }
 
+    /** Start from a single {@link CommitRef} ({@link Branch}, {@link Commit}, {@link RemoteBranch}, or spec). */
+    public static Log from(CommitRef target) { return EMPTY.includeTarget(toTarget(target)); }
+
     /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
     public static Log range(CommitRef exclude, CommitRef include) {
         return EMPTY.includeTarget(toTarget(include)).excludeTarget(toTarget(exclude));

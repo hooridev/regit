@@ -56,16 +56,36 @@ repo.push(origin, PushOptions.defaults().setUpstream());
 repo.push(origin, PushOptions.defaults().forceWithLease());
 
 // 4. Force push verified against an explicit expected CommitRef
-Commit expected = repo.commit("origin/main");
+Commit expected = repo.getCommit("origin/main");
 repo.push(origin, current, "main", PushOptions.defaults().forceWithLease(expected));
 
-// 5. Unconditional force push (`git push -f`)
+// 5. Push a specific branch to a matching remote branch name
+repo.push(origin, repo.branch("feat/search"));
+
+// 6. Unconditional force push (`git push -f`)
 repo.push(origin, PushOptions.defaults().force());
 
-// 6. Delete a remote branch (`git push origin --delete feat/old`)
+// 7. Delete a remote branch (`git push origin --delete feat/old`)
 repo.deleteRemoteBranch(origin, "feat/old");
 // Or pass a RemoteBranch object directly:
 repo.deleteRemoteBranch(repo.remoteBranch("origin", "feat/old"));
+```
+
+## Pull (`git pull`)
+
+`pull(Remote)` fetches the remote and merges the configured upstream tracking branch (or matching branch name) into the current branch:
+
+```java title="PullFromRemote.java"
+Remote origin = repo.remote("origin");
+
+// Standard pull using default author configured via withAuthor(...)
+MergeResult pulled = repo.pull(origin);
+
+// Fast-forward only (`git pull --ff-only`)
+MergeResult ff = repo.pull(origin, MergeOptions.defaults().fastForwardOnly());
+
+// Or pass an explicit Identity
+MergeResult explicit = repo.pull("origin", Identity.now("Alix", "alix@example.org"));
 ```
 
 ## Smart HTTP with Custom `HttpClient` (Auth & TLS)

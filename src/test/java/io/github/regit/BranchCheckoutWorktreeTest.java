@@ -36,7 +36,7 @@ class BranchCheckoutWorktreeTest {
 
         // createBranch at explicit Commit object
         Branch atC1 = repo.createBranch("at-c1", c1);
-        assertEquals(c1.id(), repo.commit(atC1).id());
+        assertEquals(c1.id(), repo.getCommit(atC1).id());
 
         // unmerged topic branch
         Branch topic = repo.checkoutNewBranch("topic", c1);
@@ -77,7 +77,7 @@ class BranchCheckoutWorktreeTest {
 
         // -f (forceCreateBranch moves existing unchecked-out branch)
         repo.forceCreateBranch("at-c1", t1);
-        assertEquals(t1.id(), repo.commit(atC1).id());
+        assertEquals(t1.id(), repo.getCommit(atC1).id());
         assertEquals(t1.id(), git(root, "rev-parse", "at-c1"));
         assertThrows(IOException.class, () -> repo.forceCreateBranch("main", c1)); // checked out
 
@@ -117,7 +117,7 @@ class BranchCheckoutWorktreeTest {
 
         // checkout -B resets existing branch to c2 and switches to it
         repo.checkoutResetBranch("feat", c2);
-        assertEquals(c2.id(), repo.commit(feat).id());
+        assertEquals(c2.id(), repo.getCommit(feat).id());
         assertEquals("v2\n", Files.readString(root.resolve("file.txt")));
 
         // checkout --detach
@@ -137,7 +137,7 @@ class BranchCheckoutWorktreeTest {
         assertTrue(repo.isDetachedHead());
         assertEquals(List.of(c1.id()), cDetached.parents());
         assertEquals(cDetached.id(), git(root, "rev-parse", "HEAD"));
-        assertEquals(c2.id(), repo.commit("main").id());
+        assertEquals(c2.id(), repo.getCommit("main").id());
 
         // Switching back from detached HEAD to a local branch
         repo.switchBranch("main");

@@ -202,7 +202,7 @@ class MergeAndRebaseTest {
 
         // Compare against native git rebase --onto base topic native-sub
         git(work, "rebase", "--onto", base.id(), topic.name(), nativeSub.name());
-        assertEquals(git(work, "rev-parse", "native-sub"), repo.commit(sub).id());
+        assertEquals(git(work, "rev-parse", "native-sub"), repo.getCommit(sub).id());
         assertEquals(List.of("feat: sub"), repo.log(Log.range(base, sub)).stream().map(Commit::subject).toList());
         git(work, "fsck", "--strict");
     }
@@ -265,7 +265,7 @@ class MergeAndRebaseTest {
         assertEquals("topic", git(root, "branch", "--show-current"));
         assertEquals(List.of("topic2", "topic1", "main1", "base"),
                 repo.log().stream().map(Commit::subject).toList());
-        assertEquals(m1.id(), repo.commit("HEAD~2").id());
+        assertEquals(m1.id(), repo.getCommit("HEAD~2").id());
         assertEquals("topic1\n", Files.readString(root.resolve("shared.txt")));
         assertEquals("topic2\n", Files.readString(root.resolve("second.txt")));
         assertEquals("", git(root, "status", "--porcelain"));

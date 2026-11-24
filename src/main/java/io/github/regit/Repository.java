@@ -3,6 +3,7 @@ package io.github.regit;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.function.Supplier;
 import static io.github.regit.GitFiles.*;
 
 /** A handle to one worktree (or bare repository). Branch names are short local names. */
@@ -11,25 +12,39 @@ public final class Repository {
     private final ObjectsDb db;
     private final Trees trees;
     private final Lifecycle lifecycle;
-
     private final ContentMerge contentMerge;
+    private final Supplier<Identity> defaultAuthor;
 
-    private Repository(Layout layout, Lifecycle lifecycle, ContentMerge contentMerge) {
+    private Repository(Layout layout, Lifecycle lifecycle, ContentMerge contentMerge, Supplier<Identity> defaultAuthor) {
         this.contentMerge = contentMerge;
         this.layout = layout;
         this.lifecycle = lifecycle;
+        this.defaultAuthor = defaultAuthor;
         db = new ObjectsDb(layout.common());
         trees = new Trees(db);
     }
     private static final Lifecycle DEFAULT = new Lifecycle() {};
+
+    /** Initialize a new repository with default branch {@code "main"}. */
+    public static Repository init(Path root) throws IOException {
+        return init(root, "main");
+    }
+
     public static Repository init(Path root, String branch) throws IOException {
-        return new Repository(Layout.init(root, branch, false), DEFAULT, ContentMerge.text());
+        return new Repository(Layout.init(root, branch, false), DEFAULT, ContentMerge.text(), null);
     }
+
+    /** Initialize a new bare repository with default branch {@code "main"}. */
+    public static Repository initBare(Path directory) throws IOException {
+        return initBare(directory, "main");
+    }
+
     public static Repository initBare(Path directory, String branch) throws IOException {
-        return new Repository(Layout.init(directory, branch, true), DEFAULT, ContentMerge.text());
+        return new Repository(Layout.init(directory, branch, true), DEFAULT, ContentMerge.text(), null);
     }
+
     public static Repository open(Path directory) throws IOException {
-        return new Repository(Layout.open(directory), DEFAULT, ContentMerge.text());
+        return new Repository(Layout.open(directory), DEFAULT, ContentMerge.text(), null);
     }
     public boolean isBare() { return layout.root() == null; }
 
@@ -194,10 +209,32 @@ public final class Repository {
         return new GitHttpHandler(layout, db, Objects.requireNonNull(access), lifecycle);
     }
     public Repository withLifecycle(Lifecycle hook) {
-        return new Repository(layout, Objects.requireNonNull(hook), contentMerge);
+        return new Repository(layout, Objects.requireNonNull(hook), contentMerge, defaultAuthor);
     }
     public Repository withContentMerge(ContentMerge strategy) {
-        return new Repository(layout, lifecycle, Objects.requireNonNull(strategy));
+        return new Repository(layout, lifecycle, Objects.requireNonNull(strategy), defaultAuthor);
+    }
+
+    /**
+     * Configure a default author/committer stamped with the current time on each commit, merge, or rebase.
+     * Inherited by linked worktrees created from this handle.
+     */
+    public Repository withAuthor(String name, String email) {
+        Identity.now(name, email); // validate eagerly
+        return new Repository(layout, lifecycle, contentMerge, () -> Identity.now(name, email));
+    }
+
+    /** Configure a fixed default {@link Identity} for commits, merges, and rebases. */
+    public Repository withAuthor(Identity identity) {
+        Objects.requireNonNull(identity, "identity");
+        return new Repository(layout, lifecycle, contentMerge, () -> identity);
+    }
+
+    private Identity requireAuthor() {
+        if (defaultAuthor == null) {
+            throw new IllegalStateException("No default author configured; call withAuthor(...) or pass an Identity");
+        }
+        return Objects.requireNonNull(defaultAuthor.get(), "defaultAuthor");
     }
     public String branch() throws IOException { return layout.current(); }
     public Branch currentBranch() throws IOException { return new Branch(layout, branch()); }
@@ -225,13 +262,13 @@ public final class Repository {
     }
 
     /** Resolve any Git revision expression (branch, tag, SHA, short SHA, {@code HEAD~2}, etc.) to a commit. */
-    public Commit commit(String revision) throws IOException {
+    public Commit getCommit(String revision) throws IOException {
         String id = new Revisions(layout, db).resolveCommit(Objects.requireNonNull(revision));
         return revision(id).toCommit(id);
     }
 
-    /** Resolve any {@link CommitRef} ({@link Branch}, {@link Commit}, etc.) to its commit. */
-    public Commit commit(CommitRef target) throws IOException {
+    /** Resolve any {@link CommitRef} ({@link Branch}, {@link RemoteBranch}, {@link Commit}, etc.) to its commit. */
+    public Commit getCommit(CommitRef target) throws IOException {
         String id = new Revisions(layout, db).resolveCommit(target);
         return revision(id).toCommit(id);
     }
@@ -242,23 +279,11 @@ public final class Repository {
     /** Walk up to {@code limit} commits from {@code HEAD}. */
     public List<Commit> log(int limit) throws IOException { return log(Log.of().limit(limit)); }
 
-    /** Walk commit history starting at a local branch. */
-    public List<Commit> log(Branch branch) throws IOException { return log(Log.from(branch)); }
+    /** Walk commit history starting at any {@link CommitRef} ({@link Branch}, {@link RemoteBranch}, {@link Commit}). */
+    public List<Commit> log(CommitRef target) throws IOException { return log(Log.from(target)); }
 
-    /** Walk up to {@code limit} commits starting at a local branch. */
-    public List<Commit> log(Branch branch, int limit) throws IOException { return log(Log.from(branch).limit(limit)); }
-
-    /** Walk commit history starting at a commit. */
-    public List<Commit> log(Commit commit) throws IOException { return log(Log.from(commit)); }
-
-    /** Walk up to {@code limit} commits starting at a commit. */
-    public List<Commit> log(Commit commit, int limit) throws IOException { return log(Log.from(commit).limit(limit)); }
-
-    /** Walk commit history starting at a remote-tracking branch. */
-    public List<Commit> log(RemoteBranch branch) throws IOException { return log(Log.from(branch)); }
-
-    /** Walk up to {@code limit} commits starting at a remote-tracking branch. */
-    public List<Commit> log(RemoteBranch branch, int limit) throws IOException { return log(Log.from(branch).limit(limit)); }
+    /** Walk up to {@code limit} commits starting at any {@link CommitRef}. */
+    public List<Commit> log(CommitRef target, int limit) throws IOException { return log(Log.from(target).limit(limit)); }
 
     /** Walk commit history for a revision or range (e.g. {@code "main"}, {@code "v1..HEAD"}, {@code "a...b"}). */
     public List<Commit> log(String revision) throws IOException { return log(Log.from(revision)); }
@@ -361,7 +386,7 @@ public final class Repository {
 
     /** Show a commit's diff against its first parent with options. */
     public CommitDiff showDiff(CommitRef target, DiffOptions options) throws IOException {
-        Commit c = commit(target);
+        Commit c = getCommit(target);
         return new CommitDiff(c, new DiffEngine(layout, db).diffCommitAgainstParent(c, options));
     }
 
@@ -397,6 +422,11 @@ public final class Repository {
         var work = working();
         return Status.scan(layout, work, snapshot(new Revisions(layout, db).resolveHeadOptional()),
                 Index.readAll(layout.index()));
+    }
+
+    /** True when the working tree has no staged, unstaged, untracked, or conflicted files. */
+    public boolean isClean() throws IOException {
+        return status().isClean() && conflictedFiles().isEmpty();
     }
 
     /** Paths with unresolved merge/rebase conflicts in the index (stages 1..3). */
@@ -503,6 +533,16 @@ public final class Repository {
         return normalized;
     }
 
+    /** Create a commit from the staged index using the default author configured via {@link #withAuthor}. */
+    public Commit commit(String message) throws IOException {
+        return commit(message, requireAuthor());
+    }
+
+    /** Create a commit with options using the default author configured via {@link #withAuthor}. */
+    public Commit commit(String message, CommitOptions options) throws IOException {
+        return commit(message, requireAuthor(), options);
+    }
+
     /** Create a commit from the staged index using {@code author} as both author and committer. */
     public Commit commit(String message, Identity author) throws IOException {
         Objects.requireNonNull(author, "author");
@@ -600,13 +640,35 @@ public final class Repository {
 
     private String resolveCommitMessage(String message, CommitRef fixupTarget, String fallback) throws IOException {
         if (fixupTarget != null) {
-            Commit target = commit(fixupTarget);
+            Commit target = getCommit(fixupTarget);
             return "fixup! " + target.subject() + "\n";
         }
         if (message != null) return message;
         if (fallback != null) return fallback;
         throw new NullPointerException("Commit message is required");
     }
+
+    /** Conclude an in-progress merge using its stored {@code MERGE_MSG} and the default author. */
+    public Commit commitMerge() throws IOException { return commitMerge(requireAuthor()); }
+
+    /** Conclude an in-progress merge using its stored {@code MERGE_MSG}. */
+    public Commit commitMerge(Identity author) throws IOException {
+        if (!isMergeInProgress()) throw new IOException("No merge in progress");
+        return commit(null, Objects.requireNonNull(author, "author"), CommitOptions.defaults());
+    }
+
+    /** Conclude an in-progress merge with a custom message and the default author. */
+    public Commit commitMerge(String message) throws IOException { return commitMerge(message, requireAuthor()); }
+
+    /** Conclude an in-progress merge with a custom message. */
+    public Commit commitMerge(String message, Identity author) throws IOException {
+        if (!isMergeInProgress()) throw new IOException("No merge in progress");
+        return commit(Objects.requireNonNull(message, "message"), Objects.requireNonNull(author, "author"),
+                CommitOptions.defaults());
+    }
+
+    /** Stage all modified/deleted tracked files and commit ({@code git commit -a -m ...}) using the default author. */
+    public Commit commitAll(String message) throws IOException { return commitAll(message, requireAuthor()); }
 
     /** Stage all modified/deleted tracked files and commit ({@code git commit -a -m ...}) using {@code author} as committer. */
     public Commit commitAll(String message, Identity author) throws IOException {
@@ -620,6 +682,9 @@ public final class Repository {
                 committer, CommitOptions.defaults().all());
     }
 
+    /** Amend the current HEAD commit with a new message ({@code git commit --amend -m ...}) using the default author. */
+    public Commit amend(String message) throws IOException { return amend(message, requireAuthor()); }
+
     /** Amend the current HEAD commit with a new message ({@code git commit --amend -m ...}) using {@code author} as committer. */
     public Commit amend(String message, Identity author) throws IOException {
         Objects.requireNonNull(author, "author");
@@ -631,9 +696,20 @@ public final class Repository {
         return commit(Objects.requireNonNull(message), author, committer, CommitOptions.defaults().amend());
     }
 
+    /** Amend the current HEAD commit keeping original author & message ({@code --amend --no-edit}) using the default committer. */
+    public Commit amendNoEdit() throws IOException { return amendNoEdit(requireAuthor()); }
+
     /** Amend the current HEAD commit keeping its original author and message ({@code git commit --amend --no-edit}). */
     public Commit amendNoEdit(Identity committer) throws IOException {
         return commit(null, null, committer, CommitOptions.defaults().amend());
+    }
+
+    /** Create a {@code fixup!} commit targeting {@code target} using the default author. */
+    public Commit fixup(CommitRef target) throws IOException { return fixup(target, requireAuthor()); }
+
+    /** Create a {@code fixup!} commit with extra options using the default author. */
+    public Commit fixup(CommitRef target, CommitOptions options) throws IOException {
+        return fixup(target, requireAuthor(), options);
     }
 
     /** Create a {@code fixup!} commit targeting {@code target} ({@code git commit --fixup=<target>}) using {@code author} as committer. */
@@ -961,7 +1037,7 @@ public final class Repository {
             try (var ref = new Lock(layout.ref(name))) {
                 String tip = layout.require(name);
                 Layout child = Worktrees.create(layout, db, destination, name, tip, false, options.isForce());
-                return new Repository(child, lifecycle, contentMerge);
+                return new Repository(child, lifecycle, contentMerge, defaultAuthor);
             }
         });
     }
@@ -980,7 +1056,7 @@ public final class Repository {
                 Branches.clearEmptyRefDir(layout, newBranch);
                 Layout child = Worktrees.create(layout, db, destination, newBranch, tip, false, true);
                 ref.publish(tip + "\n");
-                return new Repository(child, lifecycle, contentMerge);
+                return new Repository(child, lifecycle, contentMerge, defaultAuthor);
             }
         });
     }
@@ -990,7 +1066,7 @@ public final class Repository {
         return change(Lifecycle.Operation.WORKTREE, "HEAD", () -> {
             String tip = new Revisions(layout, db).resolveCommit(target);
             Layout child = Worktrees.create(layout, db, destination, null, tip, true, false);
-            return new Repository(child, lifecycle, contentMerge);
+            return new Repository(child, lifecycle, contentMerge, defaultAuthor);
         });
     }
 
@@ -1071,18 +1147,45 @@ public final class Repository {
         return normalized;
     }
 
+    /** Merge the currently checked-out branch of another worktree using the default author and default message. */
+    public MergeResult merge(Repository source) throws IOException {
+        return merge(source, requireAuthor());
+    }
+
+    /** Merge the currently checked-out branch of another worktree with default message ({@code Merge <branch>}). */
+    public MergeResult merge(Repository source, Identity who) throws IOException {
+        String targetBranch = liveWorktree(source).current();
+        return merge(CommitRef.of(targetBranch), who, null, MergeOptions.defaults());
+    }
+
     /** Merge the currently checked-out branch of another worktree in this repository. */
-    public String merge(Repository source, Identity who, String message) throws IOException {
+    public MergeResult merge(Repository source, Identity who, String message) throws IOException {
         return merge(liveWorktree(source).current(), who, message);
     }
 
-    public String merge(Branch source, Identity who, String message) throws IOException {
-        return merge(source.nameIn(layout), who, message);
+    /** Merge any {@link CommitRef} using the default author and default merge message. */
+    public MergeResult merge(CommitRef source) throws IOException {
+        return merge(source, requireAuthor(), null, MergeOptions.defaults());
     }
 
-    public String merge(String source, Identity who, String message) throws IOException {
-        return merge(CommitRef.of(source), who, Objects.requireNonNull(message), MergeOptions.defaults())
-                .commit().orElseThrow().id();
+    /** Merge any {@link CommitRef} with {@link MergeOptions} using the default author. */
+    public MergeResult merge(CommitRef source, MergeOptions options) throws IOException {
+        return merge(source, requireAuthor(), null, options);
+    }
+
+    /** Merge any {@link CommitRef} with default merge message ({@code git merge --no-edit}). */
+    public MergeResult merge(CommitRef source, Identity who) throws IOException {
+        return merge(source, who, null, MergeOptions.defaults());
+    }
+
+    /** Merge any {@link CommitRef} with an explicit commit message. */
+    public MergeResult merge(CommitRef source, Identity who, String message) throws IOException {
+        return merge(source, who, Objects.requireNonNull(message, "message"), MergeOptions.defaults());
+    }
+
+    /** Merge any {@link CommitRef} with {@link MergeOptions} and default merge message. */
+    public MergeResult merge(CommitRef source, Identity who, MergeOptions options) throws IOException {
+        return merge(source, who, null, options);
     }
 
     /** Merge any {@link CommitRef} ({@link Branch}, {@link RemoteBranch}, {@link Commit}, etc.) with {@link MergeOptions}. */
@@ -1092,6 +1195,31 @@ public final class Repository {
             String sourceId = new Revisions(layout, db).resolveCommit(source);
             return Merges.merge(layout, db, trees, contentMerge, sourceId, label, who, message, options);
         });
+    }
+
+    /** Merge a revision string using the default author and default merge message. */
+    public MergeResult merge(String source) throws IOException {
+        return merge(CommitRef.of(source), requireAuthor(), null, MergeOptions.defaults());
+    }
+
+    /** Merge a revision string with {@link MergeOptions} using the default author. */
+    public MergeResult merge(String source, MergeOptions options) throws IOException {
+        return merge(CommitRef.of(source), requireAuthor(), null, options);
+    }
+
+    /** Merge a revision string with default merge message. */
+    public MergeResult merge(String source, Identity who) throws IOException {
+        return merge(CommitRef.of(source), who, null, MergeOptions.defaults());
+    }
+
+    /** Merge a revision string with an explicit commit message. */
+    public MergeResult merge(String source, Identity who, String message) throws IOException {
+        return merge(CommitRef.of(source), who, Objects.requireNonNull(message, "message"), MergeOptions.defaults());
+    }
+
+    /** Merge a revision string with {@link MergeOptions} and default merge message. */
+    public MergeResult merge(String source, Identity who, MergeOptions options) throws IOException {
+        return merge(CommitRef.of(source), who, null, options);
     }
 
     /** Merge a revision string with {@link MergeOptions}. */
@@ -1107,12 +1235,19 @@ public final class Repository {
         });
     }
 
-    public String rebase(Branch onto, Identity who) throws IOException {
-        return rebase(onto, who, RebaseOptions.defaults()).head().orElseThrow().id();
+    /** Rebase current HEAD onto {@code upstream} using the default author. */
+    public RebaseResult rebase(CommitRef upstream) throws IOException {
+        return rebase(upstream, requireAuthor(), RebaseOptions.defaults());
     }
 
-    public String rebase(String onto, Identity who) throws IOException {
-        return rebase(CommitRef.of(onto), who, RebaseOptions.defaults()).head().orElseThrow().id();
+    /** Rebase current HEAD onto {@code upstream} with {@link RebaseOptions} using the default author. */
+    public RebaseResult rebase(CommitRef upstream, RebaseOptions options) throws IOException {
+        return rebase(upstream, requireAuthor(), options);
+    }
+
+    /** Rebase current HEAD onto any {@link CommitRef} ({@link Branch}, {@link RemoteBranch}, {@link Commit}). */
+    public RebaseResult rebase(CommitRef upstream, Identity who) throws IOException {
+        return rebase(upstream, who, RebaseOptions.defaults());
     }
 
     /** Rebase current HEAD onto {@code upstream} (accepting {@link Branch}, {@link RemoteBranch}, {@link Commit}, etc.) with {@link RebaseOptions}. */
@@ -1124,10 +1259,28 @@ public final class Repository {
         });
     }
 
+    /** Rebase current HEAD onto a revision string using the default author. */
+    public RebaseResult rebase(String upstream) throws IOException {
+        return rebase(CommitRef.of(upstream), requireAuthor(), RebaseOptions.defaults());
+    }
+
+    /** Rebase current HEAD onto a revision string with {@link RebaseOptions} using the default author. */
+    public RebaseResult rebase(String upstream, RebaseOptions options) throws IOException {
+        return rebase(CommitRef.of(upstream), requireAuthor(), options);
+    }
+
+    /** Rebase current HEAD onto a revision string (e.g. {@code "origin/main"}). */
+    public RebaseResult rebase(String upstream, Identity who) throws IOException {
+        return rebase(CommitRef.of(upstream), who, RebaseOptions.defaults());
+    }
+
     /** Rebase current HEAD onto a revision string (e.g. {@code "origin/main"}) with {@link RebaseOptions}. */
     public RebaseResult rebase(String upstream, Identity who, RebaseOptions options) throws IOException {
         return rebase(CommitRef.of(upstream), who, options);
     }
+
+    /** Continue a paused rebase using the default author ({@code git rebase --continue}). */
+    public RebaseResult continueRebase() throws IOException { return continueRebase(requireAuthor()); }
 
     /** Continue a paused rebase after resolving and staging conflicts ({@code git rebase --continue}). */
     public RebaseResult continueRebase(Identity who) throws IOException {
@@ -1231,12 +1384,71 @@ public final class Repository {
         return push(remote, currentBranch(), current, options);
     }
 
+    /** Push {@code branch} to a matching branch name on {@code remote}. */
+    public String push(Remote remote, Branch branch) throws IOException {
+        String name = Objects.requireNonNull(branch, "branch").nameIn(layout);
+        return push(remote, branch, name, PushOptions.defaults());
+    }
+
+    /** Push {@code branch} to a matching branch name on {@code remote} with options. */
+    public String push(Remote remote, Branch branch, PushOptions options) throws IOException {
+        String name = Objects.requireNonNull(branch, "branch").nameIn(layout);
+        return push(remote, branch, name, options);
+    }
+
     /** Push {@code source} branch to {@code destination} on {@code remote} with options. */
     public String push(Remote remote, Branch source, String destination, PushOptions options) throws IOException {
         String localName = options.isDelete() ? "" : Objects.requireNonNull(source).nameIn(layout);
         Objects.requireNonNull(remote).nameIn(layout);
         return change(Lifecycle.Operation.PUSH, destination,
                 () -> Remotes.push(layout, db, remote, localName, destination, options));
+    }
+
+    /** Fetch from {@code remote} and merge its tracking branch (or same-named branch) using the default author. */
+    public MergeResult pull(Remote remote) throws IOException {
+        return pull(remote, requireAuthor(), FetchOptions.defaults(), MergeOptions.defaults());
+    }
+
+    /** Fetch from {@code remote} and merge using {@link MergeOptions} and the default author (e.g. {@code --ff-only}). */
+    public MergeResult pull(Remote remote, MergeOptions mergeOptions) throws IOException {
+        return pull(remote, requireAuthor(), FetchOptions.defaults(), mergeOptions);
+    }
+
+    /** Fetch from {@code remote} and merge into the current branch. */
+    public MergeResult pull(Remote remote, Identity who) throws IOException {
+        return pull(remote, who, FetchOptions.defaults(), MergeOptions.defaults());
+    }
+
+    /** Fetch from {@code remote} and merge with {@link MergeOptions} (e.g. {@code --ff-only} or {@code --no-ff}). */
+    public MergeResult pull(Remote remote, Identity who, MergeOptions mergeOptions) throws IOException {
+        return pull(remote, who, FetchOptions.defaults(), mergeOptions);
+    }
+
+    /** Fetch from {@code remote} with {@link FetchOptions} and merge with {@link MergeOptions}. */
+    public MergeResult pull(Remote remote, Identity who, FetchOptions fetchOptions, MergeOptions mergeOptions)
+            throws IOException {
+        String remoteName = Objects.requireNonNull(remote, "remote").nameIn(layout);
+        String current = branch();
+        return change(Lifecycle.Operation.PULL, remoteName, () -> {
+            Remotes.fetch(layout, db, remote, fetchOptions);
+            String remoteBranchName = GitConfig.upstream(layout, current)
+                    .filter(u -> u.remote().equals(remoteName))
+                    .map(GitConfig.Upstream::branch)
+                    .orElse(current);
+            RemoteBranch target = remoteBranch(remoteName, remoteBranchName);
+            String targetId = new Revisions(layout, db).resolveRemoteBranch(target);
+            return Merges.merge(layout, db, trees, contentMerge, targetId, target.fullName(), who, null, mergeOptions);
+        });
+    }
+
+    /** Fetch from a named remote (e.g. {@code "origin"}) and merge using the default author. */
+    public MergeResult pull(String remoteName) throws IOException {
+        return pull(remote(remoteName), requireAuthor());
+    }
+
+    /** Fetch from a named remote (e.g. {@code "origin"}) and merge into the current branch. */
+    public MergeResult pull(String remoteName, Identity who) throws IOException {
+        return pull(remote(remoteName), who);
     }
 
     /** Delete {@code remoteBranchName} on {@code remote} ({@code git push <remote> --delete <branch>}). */

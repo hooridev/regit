@@ -9,25 +9,24 @@ description: Merge modes (--no-ff, --ff-only, --no-commit), rebase (--onto, --au
 
 ```java title="MergeModes.java"
 Branch feature = repo.branch("feat/search");
-var committer = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
+var committer = Identity.now("Alix", "alix@example.org");
 
-// 1. Default: fast-forward if possible, otherwise write a 2-parent merge commit
-MergeResult standard = repo.merge(feature, committer, "merge: feat/search\n",
-    MergeOptions.defaults());
+// 1. Default: fast-forward if possible, otherwise write a 2-parent merge commit (default message)
+MergeResult standard = repo.merge(feature, committer);
 
 // 2. Always write a merge commit (`git merge --no-ff`)
 MergeResult noFf = repo.merge(feature, committer, "merge: feat/search\n",
     MergeOptions.defaults().noFastForward());
 
 // 3. Fast-forward only; throw IOException on divergence (`git merge --ff-only`)
-MergeResult ffOnly = repo.merge(repo.remoteBranch("origin", "main"), committer, "",
+MergeResult ffOnly = repo.merge(repo.remoteBranch("origin", "main"), committer,
     MergeOptions.defaults().fastForwardOnly());
 
 // 4. Stage merge & write MERGE_HEAD without committing (`git merge --no-commit`)
 MergeResult staged = repo.merge(feature, committer, "merge: feat/search\n",
     MergeOptions.defaults().noCommit());
-// Inspect or edit staged files, then conclude (writes 2-parent merge commit):
-Commit mergeCommit = repo.commit(null, committer, CommitOptions.defaults());
+// Inspect or edit staged files, then conclude cleanly using the stored MERGE_MSG:
+Commit mergeCommit = repo.commitMerge(committer);
 ```
 
 ## Resolving Conflicts with `--ours` / `--theirs`
@@ -55,7 +54,7 @@ if (result.isConflicted()) {
     repo.stage("config/app.properties", "docs/README.md");
 
     // Conclude the 2-parent merge commit
-    Commit merged = repo.commit("merge: resolved conflicts\n", committer);
+    Commit merged = repo.commitMerge("merge: resolved conflicts\n", committer);
 }
 ```
 
@@ -75,7 +74,7 @@ if (repo.isMergeInProgress()) {
 repo.fetch("origin");
 RemoteBranch originMain = repo.remoteBranch("origin", "main");
 
-RebaseResult res = repo.rebase(originMain, committer, RebaseOptions.defaults());
+RebaseResult res = repo.rebase(originMain, committer);
 System.out.println("Rebase status: " + res.status() + " -> " + res.head().orElseThrow().shortId());
 ```
 

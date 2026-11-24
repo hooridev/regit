@@ -10,6 +10,11 @@ import java.util.Objects;
 
 /** Explicit timestamps allow reproducible commits and independently dated authors. */
 public record Identity(String name, String email, OffsetDateTime when) {
+    /** Create an identity stamped with the current local time (truncated to whole seconds). */
+    public static Identity now(String name, String email) {
+        return new Identity(name, email, OffsetDateTime.now().withNano(0));
+    }
+
     public Identity {
         Objects.requireNonNull(when);
         for (String field : new String[]{name, email}) {

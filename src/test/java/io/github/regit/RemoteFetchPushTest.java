@@ -61,8 +61,8 @@ class RemoteFetchPushTest {
         RemoteBranch originMain = repoB.remoteBranch("origin", "main");
         RemoteBranch originTopic = repoB.remoteBranch("origin", "topic");
         assertEquals(List.of(originMain, originTopic), repoB.remoteBranches());
-        assertEquals(c1.id(), repoB.commit(originMain).id());
-        assertEquals(t1.id(), repoB.commit(originTopic).id());
+        assertEquals(c1.id(), repoB.getCommit(originMain).id());
+        assertEquals(t1.id(), repoB.getCommit(originTopic).id());
         assertEquals("v1\n", repoB.showText(originMain, "f.txt"));
         assertEquals(List.of(t1.id(), c1.id()), repoB.log(originTopic).stream().map(Commit::id).toList());
         assertTrue(repoB.isAncestor(originMain, originTopic));
@@ -83,7 +83,7 @@ class RemoteFetchPushTest {
         // Push c2 from A, then create divergent history on A and test force-with-lease vs force
         repoA.push(originA);
         repoB.fetch(originB);
-        assertEquals(c2.id(), repoB.commit(originMain).id());
+        assertEquals(c2.id(), repoB.getCommit(originMain).id());
 
         // Rewrite A's main using amend -> non-FF push must fail
         writeFile(workA, "f.txt", "v2-amended\n");
@@ -196,8 +196,8 @@ class RemoteFetchPushTest {
             Remote originB = repoB.addRemote("origin", url);
             FetchResult fetched = repoB.fetch(originB, FetchOptions.defaults().httpClient(httpClient));
             assertEquals(2, fetched.updated().size());
-            assertEquals(c1.id(), repoB.commit("origin/main").id());
-            assertEquals(f1.id(), repoB.commit("origin/feature").id());
+            assertEquals(c1.id(), repoB.getCommit("origin/main").id());
+            assertEquals(f1.id(), repoB.getCommit("origin/feature").id());
 
             // Amend on feature and force-with-lease push over HTTP
             writeFile(workA, "feat.txt", "feat-v2\n");
