@@ -95,7 +95,7 @@ assert repo.abbrevRef().equals("HEAD");
 // Commit directly on detached HEAD
 Files.writeString(repo.worktreeRoot().orElseThrow().resolve("experiment.txt"), "test\n");
 repo.stage("experiment.txt");
-Commit experiment = repo.commit("wip: experiment\n", author, author);
+Commit experiment = repo.commit("wip: experiment\n", author);
 
 // Save detached work onto a named branch whenever ready
 Branch saved = repo.checkoutNewBranch("feat/experiment", experiment);

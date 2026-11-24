@@ -121,10 +121,12 @@ class StagingAndCommitTest {
         repo.stage("app.txt");
         Commit c1 = repo.commit("feat: initial feature\n\ndetails\n", WHO, WHO);
 
-        // commit -a stages modified tracked file and ignores untracked
+        // commit -a stages modified tracked file and ignores untracked (single Identity defaults committer to author)
         writeFile(root, "app.txt", "v2\n");
         writeFile(root, "untracked.txt", "stay untracked\n");
-        Commit c2 = repo.commitAll("update app\n", WHO, WHO);
+        Commit c2 = repo.commitAll("update app\n", WHO);
+        assertEquals(WHO, c2.author());
+        assertEquals(WHO, c2.committer());
         assertEquals(List.of(c1.id()), c2.parents());
         assertEquals("v2\n", repo.showText(c2, "app.txt"));
         assertEquals(Set.of("untracked.txt"), repo.status().untracked());
@@ -147,9 +149,10 @@ class StagingAndCommitTest {
         assertEquals("reworded app\n", reworded.message());
         assertEquals(reworded.id(), git(root, "rev-parse", "HEAD"));
 
-        // commit --fixup targeting Commit object (with -a option)
+        // commit --fixup targeting Commit object (with -a option, single Identity)
         writeFile(root, "app.txt", "v2-fixup\n");
-        Commit fixupCommit = repo.fixup(c1, WHO, WHO, CommitOptions.defaults().all());
+        Commit fixupCommit = repo.fixup(c1, WHO, CommitOptions.defaults().all());
+        assertEquals(WHO, fixupCommit.committer());
         assertEquals("fixup! feat: initial feature\n", fixupCommit.message());
         assertEquals("fixup! feat: initial feature", git(root, "log", "-1", "--format=%s"));
         assertEquals(List.of(reworded.id()), fixupCommit.parents());

@@ -21,14 +21,14 @@ var main = Repository.init(Path.of("project"), "main");
 var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
 Files.writeString(Path.of("project/README.md"), "First version\n");
 main.stage("README.md");
-main.commit("Start project\n", author, author);
+main.commit("Start project\n", author);
 
 var branch = main.createBranch("agent/docs");
 var checkout = Path.of("docs-checkout");
 var agent = main.addWorktree(checkout, branch);
 Files.writeString(checkout.resolve("README.md"), "Updated version\n");
 agent.stage("README.md");
-var tip = agent.commit("Update documentation\n", author, author);
+var tip = agent.commit("Update documentation\n", author);
 
 main.merge(branch, author, "Merge documentation\n");
 main.removeWorktree(agent);

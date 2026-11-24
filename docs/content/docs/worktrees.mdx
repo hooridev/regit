@@ -96,12 +96,12 @@ try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
     var taskA = executor.submit(() -> {
         Files.writeString(dirA.resolve("Api.java"), "public interface Api {}\n");
         agentA.stageAll();
-        return agentA.commit("feat: add Api\n", author, author);
+        return agentA.commit("feat: add Api\n", author);
     });
     var taskB = executor.submit(() -> {
         Files.writeString(dirB.resolve("GUIDE.md"), "# Guide\n");
         agentB.stageAll();
-        return agentB.commit("docs: add Guide\n", author, author);
+        return agentB.commit("docs: add Guide\n", author);
     });
 
     taskA.get();

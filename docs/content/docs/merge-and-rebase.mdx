@@ -27,7 +27,7 @@ MergeResult ffOnly = repo.merge(repo.remoteBranch("origin", "main"), committer, 
 MergeResult staged = repo.merge(feature, committer, "merge: feat/search\n",
     MergeOptions.defaults().noCommit());
 // Inspect or edit staged files, then conclude (writes 2-parent merge commit):
-Commit mergeCommit = repo.commit(null, committer, committer, CommitOptions.defaults());
+Commit mergeCommit = repo.commit(null, committer, CommitOptions.defaults());
 ```
 
 ## Resolving Conflicts with `--ours` / `--theirs`
@@ -55,7 +55,7 @@ if (result.isConflicted()) {
     repo.stage("config/app.properties", "docs/README.md");
 
     // Conclude the 2-parent merge commit
-    Commit merged = repo.commit("merge: resolved conflicts\n", committer, committer);
+    Commit merged = repo.commit("merge: resolved conflicts\n", committer);
 }
 ```
 

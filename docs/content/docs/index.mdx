@@ -46,7 +46,7 @@ var author = new Identity("Alix", "alix@example.org", OffsetDateTime.now());
 Repository mainRepo = Repository.init(repoDir, "main");
 Files.writeString(repoDir.resolve("README.md"), "# My Project\n");
 mainRepo.stageAll();
-Commit initial = mainRepo.commit("feat: initial commit\n", author, author);
+Commit initial = mainRepo.commit("feat: initial commit\n", author);
 
 // 2. Create an isolated worktree for a task or agent
 Path featureDir = Path.of("my-project-docs");
@@ -54,7 +54,7 @@ Repository agent = mainRepo.addWorktreeNewBranch(featureDir, "agent/docs", initi
 
 Files.writeString(featureDir.resolve("README.md"), "# My Project\n\nWith documentation.\n");
 agent.stageAll();
-Commit docsCommit = agent.commit("docs: update README\n", author, author);
+Commit docsCommit = agent.commit("docs: update README\n", author);
 
 // 3. Inspect the diff between commits
 Diff diff = mainRepo.diff(initial, docsCommit);

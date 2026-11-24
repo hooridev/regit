@@ -503,6 +503,18 @@ public final class Repository {
         return normalized;
     }
 
+    /** Create a commit from the staged index using {@code author} as both author and committer. */
+    public Commit commit(String message, Identity author) throws IOException {
+        Objects.requireNonNull(author, "author");
+        return commit(message, author, author);
+    }
+
+    /** Create a commit with options using {@code author} as both author and committer. */
+    public Commit commit(String message, Identity author, CommitOptions options) throws IOException {
+        Objects.requireNonNull(author, "author");
+        return commit(message, author, author, options);
+    }
+
     /** Create a commit from the staged index. Message is stored verbatim, including any trailing newline. */
     public Commit commit(String message, Identity author, Identity committer) throws IOException {
         return commit(Objects.requireNonNull(message), Objects.requireNonNull(author),
@@ -596,10 +608,22 @@ public final class Repository {
         throw new NullPointerException("Commit message is required");
     }
 
+    /** Stage all modified/deleted tracked files and commit ({@code git commit -a -m ...}) using {@code author} as committer. */
+    public Commit commitAll(String message, Identity author) throws IOException {
+        Objects.requireNonNull(author, "author");
+        return commitAll(message, author, author);
+    }
+
     /** Stage all modified/deleted tracked files and commit ({@code git commit -a -m ...}). */
     public Commit commitAll(String message, Identity author, Identity committer) throws IOException {
         return commit(Objects.requireNonNull(message), Objects.requireNonNull(author),
                 committer, CommitOptions.defaults().all());
+    }
+
+    /** Amend the current HEAD commit with a new message ({@code git commit --amend -m ...}) using {@code author} as committer. */
+    public Commit amend(String message, Identity author) throws IOException {
+        Objects.requireNonNull(author, "author");
+        return amend(message, author, author);
     }
 
     /** Amend the current HEAD commit with a new message ({@code git commit --amend -m ...}). */
@@ -612,9 +636,21 @@ public final class Repository {
         return commit(null, null, committer, CommitOptions.defaults().amend());
     }
 
+    /** Create a {@code fixup!} commit targeting {@code target} ({@code git commit --fixup=<target>}) using {@code author} as committer. */
+    public Commit fixup(CommitRef target, Identity author) throws IOException {
+        Objects.requireNonNull(author, "author");
+        return fixup(target, author, author);
+    }
+
     /** Create a {@code fixup!} commit targeting {@code target} ({@code git commit --fixup=<target>}). */
     public Commit fixup(CommitRef target, Identity author, Identity committer) throws IOException {
         return commit(null, Objects.requireNonNull(author), committer, CommitOptions.defaults().fixup(target));
+    }
+
+    /** Create a {@code fixup!} commit with extra options using {@code author} as committer. */
+    public Commit fixup(CommitRef target, Identity author, CommitOptions options) throws IOException {
+        Objects.requireNonNull(author, "author");
+        return fixup(target, author, author, options);
     }
 
     /** Create a {@code fixup!} commit with extra options (e.g. {@code CommitOptions.defaults().all()}). */
