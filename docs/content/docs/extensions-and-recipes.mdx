@@ -8,7 +8,7 @@ description: Policy enforcement via Lifecycle hooks, custom ContentMerge strateg
 Use `withLifecycle(...)` to inspect or veto any mutating operation before it takes effect (by throwing `IOException`), and to emit audit logs once an operation succeeds. Linked worktrees inherit configured hooks automatically.
 
 ```java title="LifecyclePolicy.java"
-import io.github.regit.*;
+import dev.hoori.regit.*;
 import java.io.IOException;
 
 Repository guarded = repo.withLifecycle(new Lifecycle() {
@@ -33,7 +33,7 @@ Repository guarded = repo.withLifecycle(new Lifecycle() {
 For structured files (such as manifests, lockfiles, or version files), provide a custom three-way merge policy and delegate all other paths to `ContentMerge.text()`:
 
 ```java title="CustomContentMerge.java"
-import io.github.regit.*;
+import dev.hoori.regit.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 Repository smartRepo = repo.withContentMerge((path, base, current, incoming) -> {

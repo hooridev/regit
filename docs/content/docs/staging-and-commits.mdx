@@ -93,7 +93,7 @@ repo.stageIntentToAdd(Path.of("docs/notes.md"));
 Configure a default identity once via `repo.withAuthor("Alix", "alix@example.org")` — or pass an explicit `Identity` (using `Identity.now(name, email)` or a fixed timestamp) per call. Pass `(author, committer)` only when author and committer differ.
 
 ```java title="BasicCommit.java"
-import io.github.regit.*;
+import dev.hoori.regit.*;
 
 Repository authored = repo.withAuthor("Alix", "alix@example.org");
 

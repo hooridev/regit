@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import fumadocs from '@fumadocs/astro';
 
 export default defineConfig({
+  site: 'https://regit.hoori.dev',
   integrations: [
     fumadocs({
       components: './src/components/mdx.tsx',

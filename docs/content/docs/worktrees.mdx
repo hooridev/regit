@@ -79,7 +79,7 @@ mainRepo.removeWorktreeForce(agent);
 Because each worktree owns its own index and operation lock, agents can commit in parallel and merge cleanly back into `main`:
 
 ```java title="ParallelAgents.java"
-import io.github.regit.*;
+import dev.hoori.regit.*;
 import java.nio.file.*;
 import java.util.concurrent.Executors;
 

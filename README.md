@@ -4,6 +4,20 @@
 
 Regit is a Java 25 library for staging files, committing, managing branches and linked worktrees, pushing, pulling, merging and rebasing in SHA-1 Git repositories. It has no runtime dependencies. Applications call its Java API directly.
 
+Documentation: [regit.hoori.dev](https://regit.hoori.dev)
+
+## Installation
+
+```xml
+<dependency>
+  <groupId>dev.hoori.regit</groupId>
+  <artifactId>regit</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+</dependency>
+```
+
+Snapshots are published to `https://central.sonatype.com/repository/maven-snapshots/`. Add this repository with snapshots enabled to use a `-SNAPSHOT` version.
+
 ## Build and verify
 
 Run `mvn clean verify` with JDK 25 and Maven. The integration tests require a Git executable with `http-backend` and a loopback interface. They create temporary repositories, compare object IDs with native Git, exercise both sides of the working-tree/index boundary and exchange data with a native smart HTTP server.
@@ -11,8 +25,8 @@ Run `mvn clean verify` with JDK 25 and Maven. The integration tests require a Gi
 ## One branch per agent
 
 ```java
-import io.github.regit.Identity;
-import io.github.regit.Repository;
+import dev.hoori.regit.Identity;
+import dev.hoori.regit.Repository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -66,8 +80,8 @@ A bare repository stores shared objects and refs and has no working directory or
 
 ```java
 import com.sun.net.httpserver.HttpServer;
-import io.github.regit.GitHttpHandler;
-import io.github.regit.Repository;
+import dev.hoori.regit.GitHttpHandler;
+import dev.hoori.regit.Repository;
 import java.net.InetSocketAddress;
 import java.nio.file.Path;
 
@@ -111,3 +125,7 @@ The implementation was written from public Git format and protocol documentation
 References include the [repository layout](https://git-scm.com/docs/gitrepository-layout), [loose object format](https://git-scm.com/docs/gitformat-loose), [index format](https://git-scm.com/docs/gitformat-index), [pack format](https://git-scm.com/docs/gitformat-pack), [pack protocol](https://git-scm.com/docs/gitprotocol-pack) and [HTTP protocol](https://git-scm.com/docs/gitprotocol-http).
 
 Created in [T3 Code](https://t3.codes).
+
+## License
+
+[MIT](LICENSE) © Patrick Trautmann
