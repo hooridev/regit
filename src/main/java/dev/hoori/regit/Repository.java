@@ -582,11 +582,15 @@ public final class Repository {
                     throw new IOException("Cannot amend an unborn branch");
                 }
                 var stage0 = new TreeMap<>(Index.readStage0(layout.index()));
-                // Read while the lock is held; commit -a republishes the index, so its old cache-tree no longer fits.
-                var cache = options.isAll() ? new HashMap<String, String>() : new HashMap<>(Index.cacheTree(layout.index()));
+                HashMap<String, String> cache;
                 if (options.isAll()) {
                     new Staging(layout, db).stageUpdatedUnlocked(work, stage0, List.of());
-                    index.publish(Index.encodeStage0(layout, db, stage0));
+                    var written = Index.encodeWithTrees(layout, db, new ArrayList<>(stage0.values()));
+                    index.publish(written.bytes());
+                    // Take the cache-tree just written; once published, the index may already be another process's.
+                    cache = new HashMap<>(written.trees());
+                } else {
+                    cache = new HashMap<>(Index.cacheTree(layout.index())); // read while the lock is held
                 }
                 // Build tree from non-intent-to-add stage-0 entries
                 var committedFiles = new HashMap<String, Entry>(stage0.size());
