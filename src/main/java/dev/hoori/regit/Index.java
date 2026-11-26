@@ -222,10 +222,11 @@ final class Index {
     }
 
     /** Build index records from resolved stage-0 entries plus conflict entries (stages 1=base, 2=ours, 3=theirs). */
-    static List<EntryRecord> combineWithConflicts(Map<String, Entry> resolved, Map<String, ThreeWay.Conflict> conflicts) {
+    static List<EntryRecord> combineWithConflicts(Map<String, Entry> resolved, Map<String, ThreeWay.Conflict> conflicts,
+                                                  Map<String, Stat> written) {
         var records = new ArrayList<EntryRecord>(resolved.size() + conflicts.size() * 3);
         for (var e : resolved.entrySet()) {
-            records.add(new EntryRecord(e.getKey(), e.getValue(), 0, false));
+            records.add(new EntryRecord(e.getKey(), e.getValue(), 0, false, written.get(e.getKey())));
         }
         for (var e : conflicts.entrySet()) {
             String path = e.getKey();
@@ -237,10 +238,12 @@ final class Index {
         return records;
     }
 
-    static byte[] encode(Layout layout, ObjectsDb db, Map<String, Entry> files) throws IOException {
+    /** {@code written} holds the stats of files just written, taken right after writing them; others are rechecked. */
+    static byte[] encode(Layout layout, ObjectsDb db, Map<String, Entry> files, Map<String, Stat> written)
+            throws IOException {
         var list = new ArrayList<EntryRecord>(files.size());
         for (var e : files.entrySet()) {
-            list.add(new EntryRecord(e.getKey(), e.getValue(), 0, false));
+            list.add(new EntryRecord(e.getKey(), e.getValue(), 0, false, written.get(e.getKey())));
         }
         return encodeRecords(layout, db, list);
     }

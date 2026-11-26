@@ -93,8 +93,8 @@ final class Merges {
             Map<String, Entry> headFiles = snapshot(db, trees, headId);
             var tracked = new HashSet<String>(headFiles.keySet());
             for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
-            work.forceReset(tracked, headFiles);
-            index.publish(Index.encode(layout, db, headFiles));
+            var written = work.forceReset(tracked, headFiles);
+            index.publish(Index.encode(layout, db, headFiles, written));
             Files.deleteIfExists(mergeHead);
             Files.deleteIfExists(layout.admin().resolve("MERGE_MSG"));
             Files.deleteIfExists(layout.admin().resolve("MERGE_MODE"));
@@ -138,14 +138,14 @@ final class Merges {
             // Apply resolved entries and remove deleted entries
             var trackedToReset = new HashSet<String>(oursMap.keySet());
             trackedToReset.removeAll(outcome.conflicts().keySet());
-            work.forceReset(trackedToReset, outcome.resolved());
+            var written = work.forceReset(trackedToReset, outcome.resolved());
             for (var e : outcome.conflicts().entrySet()) {
                 ThreeWay.Conflict c = e.getValue();
                 int mode = c.ours() != null ? c.ours().mode()
                         : (c.theirs() != null ? c.theirs().mode() : Entry.FILE);
                 work.writeRaw(e.getKey(), c.worktreeContent(), mode);
             }
-            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts())));
+            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts(), written)));
             Files.writeString(layout.admin().resolve("ORIG_HEAD"), oldHead + "\n");
             Files.writeString(layout.admin().resolve("MERGE_HEAD"), mergeHead + "\n");
             Files.writeString(layout.admin().resolve("MERGE_MSG"), mergeMsg);
@@ -168,9 +168,9 @@ final class Merges {
         try (var index = new Lock(layout.index())) {
             var staged = Index.readStage0(layout.index());
             if (!Index.matches(staged, from)) throw new IOException("Index contains staged changes");
-            work.checkout(from, to, staged, () -> {
+            work.checkout(from, to, staged, written -> {
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
-                index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
+                index.publish(Index.encode(layout, db, to, written)); // after checkout, so stat data matches the new files
                 try { publish.run(); }
                 catch (IOException failure) {
                     try (var restore = new Lock(layout.index())) {

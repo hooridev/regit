@@ -42,10 +42,12 @@ final class WorkingTree {
     }
 
     @FunctionalInterface interface Publish { void run() throws IOException; }
+    /** Gets the stat of each file the checkout wrote, so the index write need not rehash it. */
+    @FunctionalInterface interface PublishWritten { void run(Map<String, Index.Stat> written) throws IOException; }
 
     /** Preflight the entire delta, then journal each successful replacement for rollback. */
     void checkout(Map<String, Entry> from, Map<String, Entry> to,
-                  Map<String, Index.EntryRecord> staged, Publish publish) throws IOException {
+                  Map<String, Index.EntryRecord> staged, PublishWritten publish) throws IOException {
         var changed = new TreeSet<>(from.keySet());
         changed.addAll(to.keySet());
         changed.removeIf(name -> Objects.equals(from.get(name), to.get(name)));
@@ -77,6 +79,7 @@ final class WorkingTree {
             }
         }
         var undo = new ArrayDeque<Publish>();
+        var written = new HashMap<String, Index.Stat>();
         try {
             for (String name : changed) {
                 if (to.containsKey(name)) continue;
@@ -96,10 +99,10 @@ final class WorkingTree {
                     Files.createDirectory(directory);
                     undo.push(() -> Files.delete(directory));
                 }
-                replace(name, to.get(name));
+                written.put(name, replace(name, to.get(name)));
                 undo.push(() -> replace(name, from.get(name)));
             }
-            publish.run();
+            publish.run(written);
         } catch (IOException | RuntimeException failure) {
             for (var rollback : undo) {
                 try { rollback.run(); } catch (IOException e) { failure.addSuppressed(e); }
@@ -107,8 +110,8 @@ final class WorkingTree {
             throw failure;
         }
     }
-    void materializeEntry(String name, Entry entry) throws IOException {
-        replace(name, entry);
+    Index.Stat materializeEntry(String name, Entry entry) throws IOException {
+        return replace(name, entry);
     }
 
     /** Write arbitrary bytes to a worktree file (e.g. conflict markers), creating parent directories. */
@@ -133,8 +136,11 @@ final class WorkingTree {
         } finally { Files.deleteIfExists(tmp); }
     }
 
-    /** Force-reset tracked files to {@code to} (used by merge/rebase conflict checkout and {@code --abort}). */
-    void forceReset(Set<String> previouslyTracked, Map<String, Entry> to) throws IOException {
+    /**
+     * Force-reset tracked files to {@code to} (used by merge/rebase conflict checkout and {@code --abort}); returns
+     * the stat of each written file.
+     */
+    Map<String, Index.Stat> forceReset(Set<String> previouslyTracked, Map<String, Entry> to) throws IOException {
         var directories = new TreeSet<Path>(Comparator.comparingInt(Path::getNameCount)
                 .reversed().thenComparing(Comparator.naturalOrder()));
         for (String name : previouslyTracked) {
@@ -148,14 +154,17 @@ final class WorkingTree {
             try { Files.deleteIfExists(dir); }
             catch (DirectoryNotEmptyException ignored) {}
         }
+        var written = new HashMap<String, Index.Stat>();
         for (var e : to.entrySet()) {
-            replace(e.getKey(), e.getValue());
+            written.put(e.getKey(), replace(e.getKey(), e.getValue()));
         }
+        return written;
     }
 
-    private void replace(String name, Entry entry) throws IOException {
+    /** Write {@code entry} (or delete for null) and return the file's stat, taken after the move as rename sets ctime. */
+    private Index.Stat replace(String name, Entry entry) throws IOException {
         Path file = resolve(name);
-        if (entry == null) { Files.delete(file); return; }
+        if (entry == null) { Files.delete(file); return null; }
         Files.createDirectories(file.getParent());
         Path tmp = Files.exists(file) ? Files.createTempFile(file.getParent(), ".regit-", ".tmp")
                 : Files.createFile(file.resolveSibling(".regit-" + UUID.randomUUID()));
@@ -173,5 +182,7 @@ final class WorkingTree {
             }
             Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } finally { Files.deleteIfExists(tmp); }
+        try { return Index.Stat.of(file); }
+        catch (IOException unreadable) { return null; } // The file is written; the index write rehashes it instead.
     }
 }

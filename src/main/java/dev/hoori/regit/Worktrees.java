@@ -125,8 +125,8 @@ final class Worktrees {
             Path gitfile = dest.resolve(".git");
             String pointer = "gitdir: " + admin + "\n";
             try (var index = new Lock(child.index())) { // taken before checkout, see Lock.publish
-                new WorkingTree(dest, db).checkout(Map.of(), files, Map.of(), () -> {
-                    index.publish(Index.encode(child, db, files)); // after checkout, so stat data matches
+                new WorkingTree(dest, db).checkout(Map.of(), files, Map.of(), written -> {
+                    index.publish(Index.encode(child, db, files, written)); // after checkout, so stat data matches
                     Files.writeString(gitfile, pointer, StandardOpenOption.CREATE_NEW);
                 });
             }
@@ -170,7 +170,7 @@ final class Worktrees {
                     if (unexpected.isPresent()) throw new IOException("Untracked path " + unexpected.get());
                 }
                 String link = Files.readString(pointer);
-                work.checkout(files, Map.of(), staged, () -> {
+                work.checkout(files, Map.of(), staged, written -> {
                     Files.delete(pointer);
                     try { Files.delete(child.root()); }
                     catch (IOException failure) {

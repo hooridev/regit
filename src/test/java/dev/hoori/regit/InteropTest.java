@@ -90,6 +90,20 @@ class InteropTest {
         assertEquals("a", git(tmp.resolve("linked"), "diff-files", "--name-only"));
         assertEquals(Map.of("a", Status.Change.MODIFIED), linked.status().unstaged());
     }
+    @Test void checkoutHandsTheIndexWriteTheStatOfEachFileItWrote() throws Exception {
+        commit("a", "a", "one");
+        commit("dir/b", "b", "two");
+        var files = Index.read(root.resolve(".git/index"));
+        Path copy = tmp.resolve("copy");
+        Files.createDirectory(copy);
+        var work = new WorkingTree(copy, new ObjectsDb(root.resolve(".git")));
+        work.checkout(Map.of(), files, Map.of(), written -> {
+            assertEquals(files.keySet(), written.keySet());
+            for (String name : files.keySet()) assertEquals(Index.Stat.of(copy.resolve(name)), written.get(name));
+        });
+        var reset = work.forceReset(files.keySet(), files);
+        for (String name : files.keySet()) assertEquals(Index.Stat.of(copy.resolve(name)), reset.get(name));
+    }
     @Test void cacheTreeIsSharedCorrectlyWithGit() throws Exception {
         commit("top", "t", "one");
         commit("a/b/deep", "d", "two");
