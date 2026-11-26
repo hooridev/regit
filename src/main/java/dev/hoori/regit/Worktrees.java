@@ -125,7 +125,7 @@ final class Worktrees {
             Path gitfile = dest.resolve(".git");
             String pointer = "gitdir: " + admin + "\n";
             try (var index = new Lock(child.index())) { // taken before checkout, see Lock.publish
-                new WorkingTree(dest, db).checkout(Map.of(), files, () -> {
+                new WorkingTree(dest, db).checkout(Map.of(), files, Map.of(), () -> {
                     index.publish(Index.encode(child, db, files)); // after checkout, so stat data matches
                     Files.writeString(gitfile, pointer, StandardOpenOption.CREATE_NEW);
                 });
@@ -155,7 +155,8 @@ final class Worktrees {
                 String tip = new Revisions(child, db).resolveHeadOptional();
                 if (tip == null) throw new IOException("Worktree HEAD is unborn");
                 var files = new Trees(db).flatten(Revision.parse(db.read(tip, "commit")).tree());
-                if (!files.equals(Index.read(child.index()))) throw new IOException("Worktree has staged changes");
+                var staged = Index.readStage0(child.index());
+                if (!Index.matches(staged, files)) throw new IOException("Worktree has staged changes");
                 var work = new WorkingTree(child.root(), db);
                 Path pointer = child.root().resolve(".git");
                 var tracked = new HashSet<Path>();
@@ -169,7 +170,7 @@ final class Worktrees {
                     if (unexpected.isPresent()) throw new IOException("Untracked path " + unexpected.get());
                 }
                 String link = Files.readString(pointer);
-                work.checkout(files, Map.of(), () -> {
+                work.checkout(files, Map.of(), staged, () -> {
                     Files.delete(pointer);
                     try { Files.delete(child.root()); }
                     catch (IOException failure) {

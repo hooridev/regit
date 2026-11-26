@@ -57,7 +57,9 @@ final class Index {
         /** Racily clean: modified no earlier than the index was written, so the stat alone cannot prove the content. */
         boolean racy(FileTime indexWritten) {
             // Whole seconds, as Git built without USE_NSEC compares; finer would trust stats Git treats as racy.
-            return Integer.toUnsignedLong(mtimeSec) >= indexWritten.toInstant().getEpochSecond();
+            // Include ctime: an in-place edit can restore an older mtime in the same ctime tick as staging.
+            long written = indexWritten.toInstant().getEpochSecond();
+            return Integer.toUnsignedLong(mtimeSec) >= written || Integer.toUnsignedLong(ctimeSec) >= written;
         }
     }
 
@@ -179,6 +181,17 @@ final class Index {
             if (map.put(rec.path(), rec) != null) throw new IOException("Duplicate index path");
         }
         return map;
+    }
+
+    /** Compare the committable entries, ignoring intent-to-add just as read() does. */
+    static boolean matches(Map<String, EntryRecord> records, Map<String, Entry> expected) {
+        int count = 0;
+        for (var record : records.values()) {
+            if (record.intentToAdd()) continue;
+            if (!record.entry().equals(expected.get(record.path()))) return false;
+            count++;
+        }
+        return count == expected.size();
     }
 
     /** Return all paths that currently have unmerged conflict stages (stage 1, 2 or 3) in Git byte order. */

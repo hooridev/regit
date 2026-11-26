@@ -123,8 +123,8 @@ final class Merges {
                                            ThreeWay.Outcome outcome, String oldHead, String mergeHead,
                                            String mergeMsg) throws IOException {
         try (var index = new Lock(layout.index())) {
-            var staged = Index.read(layout.index());
-            if (!staged.equals(oursMap)) throw new IOException("Index contains staged changes");
+            var staged = Index.readStage0(layout.index());
+            if (!Index.matches(staged, oursMap)) throw new IOException("Index contains staged changes");
             // Preflight clean working files for all modified/deleted paths before mutating
             var touched = new HashSet<String>(oursMap.keySet());
             touched.addAll(outcome.resolved().keySet());
@@ -132,7 +132,7 @@ final class Merges {
             for (String path : touched) {
                 Entry old = oursMap.get(path);
                 if (old != null && (!Objects.equals(old, outcome.resolved().get(path)) || outcome.conflicts().containsKey(path))) {
-                    if (!old.equals(work.inspect(path, false))) throw new IOException("Local changes at " + path);
+                    work.requireClean(path, old, staged.get(path));
                 }
             }
             // Apply resolved entries and remove deleted entries
@@ -166,9 +166,9 @@ final class Merges {
                                            String oldTip, Map<String, Entry> to, WorkingTree.Publish publish) throws IOException {
         var from = snapshot(db, trees, oldTip);
         try (var index = new Lock(layout.index())) {
-            var staged = Index.read(layout.index());
-            if (!staged.equals(from)) throw new IOException("Index contains staged changes");
-            work.checkout(from, to, () -> {
+            var staged = Index.readStage0(layout.index());
+            if (!Index.matches(staged, from)) throw new IOException("Index contains staged changes");
+            work.checkout(from, to, staged, () -> {
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
                 index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
                 try { publish.run(); }

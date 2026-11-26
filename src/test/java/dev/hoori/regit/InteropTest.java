@@ -279,9 +279,21 @@ class InteropTest {
         String main = commit("x", "main", "main");
         assertEquals("x", assertThrows(MergeConflict.class, () -> repo.merge("topic", WHO, "merge")).path());
         assertThrows(MergeConflict.class, () -> repo.rebase("topic", WHO));
-        Files.writeString(root.resolve("x"), "unsaved");
-        assertThrows(IOException.class, () -> repo.switchBranch("topic"));
-        assertEquals("unsaved", Files.readString(root.resolve("x")));
+        Path x = root.resolve("x");
+        var oldMtime = java.nio.file.attribute.FileTime.fromMillis(86400000);
+        Files.setLastModifiedTime(x, oldMtime);
+        repo.stage("x");
+        Path index = root.resolve(".git/index");
+        var ctime = Integer.toUnsignedLong(Index.Stat.of(x).ctimeSec());
+        Files.setLastModifiedTime(index, java.nio.file.attribute.FileTime.from(java.time.Instant.ofEpochSecond(ctime)));
+        assertNull(Index.readStage0(index).get("x").stat()); // old mtime, but ctime is racy
+        Files.writeString(x, "edit");
+        Files.setLastModifiedTime(x, oldMtime); // same size and mtime as the indexed "main"
+        assertEquals("Local changes at x", assertThrows(IOException.class, () -> repo.switchBranch("topic")).getMessage());
+        assertEquals("Local changes at x", assertThrows(IOException.class, () -> repo.merge(repo.branch("topic"),
+                WHO, "merge", MergeOptions.defaults().allowConflicts())).getMessage());
+        assertFalse(repo.isMergeInProgress());
+        assertEquals("edit", Files.readString(x));
         assertEquals(main, repo.head().orElseThrow());
         Files.writeString(root.resolve(".git/index.lock"), "owned");
         assertThrows(IOException.class, () -> repo.stage("x"));
