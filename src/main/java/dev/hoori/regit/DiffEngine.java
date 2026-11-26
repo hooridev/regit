@@ -38,7 +38,7 @@ final class DiffEngine {
                 from.put(e.getKey(), new SnapshotEntry(entry.mode(), entry.hash(), () -> db.read(entry.hash(), "blob")));
             }
         }
-        return compute(from, worktreeSnapshot(work, raw.keySet()), options);
+        return compute(from, worktreeSnapshot(work, raw.keySet(), raw), options);
     }
 
     Diff diffIndexToHead(DiffOptions options) throws IOException {
@@ -53,8 +53,9 @@ final class DiffEngine {
         WorkingTree work = requireWorkingTree();
         Map<String, Entry> base = trees.flatten(Revision.parse(db.read(commitId, "commit")).tree());
         var tracked = new HashSet<String>(base.keySet());
-        tracked.addAll(Index.read(layout.index()).keySet());
-        return compute(fromEntries(base), worktreeSnapshot(work, tracked), options);
+        var index = Index.readStage0(layout.index());
+        for (var e : index.entrySet()) if (!e.getValue().intentToAdd()) tracked.add(e.getKey());
+        return compute(fromEntries(base), worktreeSnapshot(work, tracked, index), options);
     }
 
     Diff diffCommits(String fromCommitId, String toCommitId, DiffOptions options) throws IOException {
@@ -223,7 +224,8 @@ final class DiffEngine {
         return result;
     }
 
-    private Map<String, SnapshotEntry> worktreeSnapshot(WorkingTree work, Set<String> paths) throws IOException {
+    private Map<String, SnapshotEntry> worktreeSnapshot(WorkingTree work, Set<String> paths,
+                                                        Map<String, Index.EntryRecord> index) throws IOException {
         var result = new HashMap<String, SnapshotEntry>(paths.size());
         for (String path : paths) {
             Path file = work.resolve(path);
@@ -233,7 +235,7 @@ final class DiffEngine {
                 result.put(path, new SnapshotEntry(mode, null, () -> new byte[0]));
                 continue;
             }
-            Entry inspected = work.inspect(path, false);
+            Entry inspected = work.inspect(path, index.get(path));
             result.put(path, new SnapshotEntry(inspected.mode(), inspected.hash(), () -> Files.readAllBytes(file)));
         }
         return result;

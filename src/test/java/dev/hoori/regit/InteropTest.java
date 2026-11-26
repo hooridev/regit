@@ -90,6 +90,70 @@ class InteropTest {
         assertEquals("a", git(tmp.resolve("linked"), "diff-files", "--name-only"));
         assertEquals(Map.of("a", Status.Change.MODIFIED), linked.status().unstaged());
     }
+    @Test void cacheTreeIsSharedCorrectlyWithGit() throws Exception {
+        commit("top", "t", "one");
+        commit("a/b/deep", "d", "two");
+        commit("a/side", "s", "three");
+        Path index = root.resolve(".git/index");
+        var ours = Index.cacheTree(index);
+        assertEquals(git(root, "rev-parse", "HEAD^{tree}"), ours.get(""));
+        git(root, "read-tree", "HEAD"); // Git builds its own cache-tree for the same tree
+        assertEquals(ours, Index.cacheTree(index));
+
+        Files.writeString(root.resolve("a/b/deep"), "changed");
+        repo.stage("a/b/deep");
+        git(root, "commit", "-q", "-m", "native"); // Git takes its trees from regit's cache-tree
+        assertEquals(git(root, "hash-object", "a/b/deep"), git(root, "rev-parse", "HEAD:a/b/deep"));
+
+        Files.writeString(root.resolve("a/side"), "edited");
+        repo.stage("a/side");
+        repo.commit("regit\n", WHO, WHO); // regit takes its trees from the cache-tree Git left
+        String tree = git(root, "ls-tree", "-r", "--format=%(objectmode) %(objectname) %(path)", "HEAD");
+        assertEquals(git(root, "ls-files", "--format=%(objectmode) %(objectname) %(path)"), tree);
+        assertTrue(tree.contains(git(root, "hash-object", "a/side")), tree);
+        git(root, "fsck", "--strict", "--no-dangling");
+    }
+    @Test void smudgedIndexEntryIsNotTrusted() throws Exception {
+        commit("f", "abc", "one");
+        Thread.sleep(1100);
+        repo.stage("f"); // rewrites the index a second later, so the stat is not racy, only smudged below
+        Path index = root.resolve(".git/index");
+        assertNotNull(Index.readAll(index).getFirst().stat());
+        byte[] bytes = Files.readAllBytes(index);
+        java.nio.ByteBuffer.wrap(bytes).putInt(12 + 36, 0); // first entry's size, as Git smudges it
+        var sha = GitFiles.digest();
+        sha.update(bytes, 0, bytes.length - 20);
+        System.arraycopy(sha.digest(), 0, bytes, bytes.length - 20, 20);
+        Files.write(index, bytes);
+        Files.setLastModifiedTime(index, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
+        assertNull(Index.readAll(index).getFirst().stat());
+    }
+    @Test void commitRebuildsCachedTreesThatAreMissing() throws Exception {
+        commit("a/x", "1", "one");
+        Files.writeString(root.resolve("a/x"), "2");
+        repo.stage("a/x");
+        String id = Index.cacheTree(root.resolve(".git/index")).get("a");
+        Files.delete(root.resolve(".git/objects/" + id.substring(0, 2) + "/" + id.substring(2))); // e.g. pruned
+        repo.commit("two\n", WHO, WHO);
+        git(root, "fsck", "--strict", "--no-dangling");
+    }
+    @Test void indexOnlyModeChangeIsSeenDespiteMatchingStat() throws Exception {
+        commit("f", "content", "one");
+        Thread.sleep(1100); // so the stat Git writes next is not racy
+        git(root, "update-index", "--chmod=+x", "f");
+        assertEquals(Map.of("f", Status.Change.MODIFIED), repo.status().unstaged());
+        repo.stage("f");
+        assertEquals("100644", git(root, "ls-files", "-s", "f").substring(0, 6));
+    }
+    @Test void sameSizeEditRightAfterStagingIsStillSeen() throws Exception {
+        Files.writeString(root.resolve("f"), "aaaa");
+        repo.stage("f");
+        Files.writeString(root.resolve("f"), "bbbb"); // same mtime on coarse-timestamp filesystems: only the racy rule sees it
+        assertEquals(Map.of("f", Status.Change.MODIFIED), repo.status().unstaged());
+        assertEquals("f", git(root, "diff-files", "--name-only"));
+        repo.stageUpdated();
+        assertEquals("bbbb", git(root, "show", ":f"));
+    }
     @Test void indexIsDatedToItsLockSoGitRechecksFilesStatedUnderIt() throws Exception {
         Path index = tmp.resolve("index");
         try (var lock = new GitFiles.Lock(index)) {

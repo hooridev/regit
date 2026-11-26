@@ -437,8 +437,9 @@ final class Rebaser {
     private static void ensureCleanWorktree(Layout layout, WorkingTree work, Map<String, Entry> headFiles) throws IOException {
         Map<String, Entry> staged = Index.read(layout.index());
         if (!staged.equals(headFiles)) throw new IOException("Index contains staged changes");
+        var records = Index.readStage0(layout.index());
         for (var e : headFiles.entrySet()) {
-            if (!e.getValue().equals(work.inspect(e.getKey(), false))) {
+            if (!e.getValue().equals(work.inspect(e.getKey(), records.get(e.getKey())))) {
                 throw new IOException("Local changes at " + e.getKey());
             }
         }

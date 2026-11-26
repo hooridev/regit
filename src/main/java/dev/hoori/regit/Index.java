@@ -15,15 +15,23 @@ final class Index {
     private static final int FLAG_STAGE_MASK = 0x3000;
     private static final int FLAG_STAGE_SHIFT = 12;
     private static final int EXT_INTENT_TO_ADD = 0x2000;
+    private static final int EXT_TREE = 0x54524545; // "TREE", Git's cache-tree extension
     static final String EMPTY_BLOB_ID = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
     /** {@code stat} is the cached lstat data Git compares to skip rehashing; null means unknown (written as zeros). */
     record EntryRecord(String path, Entry entry, int stage, boolean intentToAdd, Stat stat) {
         EntryRecord(String path, Entry entry, int stage, boolean intentToAdd) { this(path, entry, stage, intentToAdd, null); }
+
+        /** True when the file still has this entry's (non-racy) stat, so its content is this entry, as Git assumes. */
+        boolean unchanged(Stat now) { return stat != null && stage == 0 && !intentToAdd && stat.equals(now); }
     }
 
-    /** lstat fields in Git's index layout (32-bit, truncated like Git does). */
-    record Stat(int ctimeSec, int ctimeNsec, int mtimeSec, int mtimeNsec, int dev, int ino, int uid, int gid, int size) {
+    /**
+     * lstat fields in Git's index layout (32-bit, truncated like Git does). {@code executable} is not stored: read
+     * from the index it is the entry's mode, so equal stats also mean the file still has the indexed mode.
+     */
+    record Stat(int ctimeSec, int ctimeNsec, int mtimeSec, int mtimeNsec, int dev, int ino, int uid, int gid, int size,
+                boolean executable) {
         /** Stat of a regular file, or null when it is missing or not a regular file. */
         static Stat of(Path file) throws IOException {
             Map<String, Object> a;
@@ -37,7 +45,9 @@ final class Index {
             var mtime = ((FileTime) a.get("lastModifiedTime")).toInstant();
             return new Stat((int) ctime.getEpochSecond(), ctime.getNano(), (int) mtime.getEpochSecond(), mtime.getNano(),
                     (int) number(a, "dev"), (int) number(a, "ino"), (int) number(a, "uid"), (int) number(a, "gid"),
-                    (int) number(a, "size"));
+                    (int) number(a, "size"), a.get("permissions") instanceof Set<?> permissions
+                            ? permissions.contains(java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE)
+                            : Files.isExecutable(file)); // same rule as WorkingTree.inspect
         }
 
         private static long number(Map<String, Object> attributes, String key) {
@@ -52,11 +62,20 @@ final class Index {
     }
 
     /** Read all index entries (stage 0..3 and intent-to-add flags). */
-    static List<EntryRecord> readAll(Path file) throws IOException {
+    static List<EntryRecord> readAll(Path file) throws IOException { return parse(file).entries(); }
+
+    /** Directories ("" is the root) whose tree id the index's cache-tree holds as valid. */
+    static Map<String, String> cacheTree(Path file) throws IOException { return parse(file).trees(); }
+
+    private record Parsed(List<EntryRecord> entries, Map<String, String> trees) {}
+
+    private static Parsed parse(Path file) throws IOException {
         var entries = new ArrayList<EntryRecord>();
-        if (!Files.exists(file)) return entries;
-        byte[] bytes = Files.readAllBytes(file);
+        var trees = new HashMap<String, String>();
+        if (!Files.exists(file)) return new Parsed(entries, trees);
+        // Time first: if the index is replaced meanwhile, an older time only marks more stats racy.
         FileTime written = Files.getLastModifiedTime(file);
+        byte[] bytes = Files.readAllBytes(file);
         if (bytes.length < 32) throw new IOException("Truncated index");
         int end = bytes.length - 20;
         var sha = digest();
@@ -93,20 +112,51 @@ final class Index {
             path(name);
             var stat = new Stat(buf.getInt(start), buf.getInt(start + 4), buf.getInt(start + 8), buf.getInt(start + 12),
                     buf.getInt(start + 16), buf.getInt(start + 20), buf.getInt(start + 28), buf.getInt(start + 32),
-                    buf.getInt(start + 36));
-            // A racily clean stat must not survive into a newer index, where Git would trust it.
-            entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd, stat.racy(written) ? null : stat));
+                    buf.getInt(start + 36), mode == Entry.EXEC);
+            // A racily clean stat must not survive into a newer index, where Git would trust it. Size 0 with a
+            // nonempty blob is how Git marks ("smudges") an entry whose content must be checked.
+            boolean unknown = stat.racy(written) || (stat.size() == 0 && !hash.equals(EMPTY_BLOB_ID));
+            entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd, unknown ? null : stat));
             buf.position(next);
         }
         while (buf.hasRemaining()) {
             if (buf.remaining() < 8) throw new IOException("Truncated index extension");
-            int extension = buf.getInt() >>> 24;
+            int signature = buf.getInt();
             int size = buf.getInt();
-            if (extension < 'A' || extension > 'Z' || size < 0 || size > buf.remaining())
+            if ((signature >>> 24) < 'A' || (signature >>> 24) > 'Z' || size < 0 || size > buf.remaining())
                 throw new IOException("Unsupported mandatory or invalid index extension");
+            if (signature == EXT_TREE) {
+                try {
+                    int[] at = {buf.position()};
+                    readTree(bytes, at, buf.position() + size, null, trees);
+                } catch (IOException | RuntimeException damaged) {
+                    trees.clear(); // Optional cache: without it trees are just recomputed.
+                }
+            }
             buf.position(buf.position() + size);
         }
-        return entries;
+        return new Parsed(entries, trees);
+    }
+
+    private static void readTree(byte[] bytes, int[] at, int end, String parent, Map<String, String> trees)
+            throws IOException {
+        String name = token(bytes, at, end, (byte) 0);
+        String path = parent == null || parent.isEmpty() ? name : parent + "/" + name;
+        int entries = Integer.parseInt(token(bytes, at, end, (byte) ' '));
+        int subtrees = Integer.parseInt(token(bytes, at, end, (byte) '\n'));
+        if (entries >= 0) {
+            if (at[0] + 20 > end) throw new IOException("Truncated cache tree");
+            trees.put(path, HEX.formatHex(bytes, at[0], at[0] + 20));
+            at[0] += 20;
+        }
+        for (int i = 0; i < subtrees; i++) readTree(bytes, at, end, path, trees);
+    }
+
+    private static String token(byte[] bytes, int[] at, int end, byte stop) throws IOException {
+        int start = at[0];
+        while (at[0] < end && bytes[at[0]] != stop) at[0]++;
+        if (at[0] == end) throw new IOException("Truncated cache tree");
+        return Entry.name(bytes, start, at[0]++ - start);
     }
 
     /** Read stage-0 non-intent-to-add entries (ready for tree writing / committed index comparison). */
@@ -186,14 +236,49 @@ final class Index {
         return encodeRecords(layout, db, new ArrayList<>(files.values()));
     }
 
-    /** Encode with stat data valid for the current worktree, like {@code git update-index --refresh}, so Git need not rehash. */
+    /**
+     * Encode with stat data valid for the current worktree, like {@code git update-index --refresh}, so Git need not
+     * rehash, and with a cache-tree, so Git and {@link Trees} need not rebuild unchanged directories.
+     */
     static byte[] encodeRecords(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
-        return encodeRecords(withStats(layout, db, records));
+        Parsed old = parse(layout.index());
+        return encodeRecords(withStats(layout, db, old, records), cacheTree(db, old, records));
     }
 
-    private static List<EntryRecord> withStats(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
+    /** Tree ids for every directory, reusing the old cache-tree where nothing beneath a directory changed. */
+    private static Map<String, String> cacheTree(ObjectsDb db, Parsed old, List<EntryRecord> records) {
+        var files = new HashMap<String, Entry>(records.size());
+        for (EntryRecord rec : records) {
+            // shortcut: no cache-tree with conflicts or intent-to-add entries; add it if those indexes get large.
+            if (rec.stage() != 0 || rec.intentToAdd()) return Map.of();
+            files.put(rec.path(), rec.entry());
+        }
+        var before = new HashMap<String, Entry>();
+        var changed = new HashSet<String>();
+        for (EntryRecord rec : old.entries()) {
+            if (rec.stage() == 0 && !rec.intentToAdd()) before.put(rec.path(), rec.entry());
+            else changed.add(rec.path());
+        }
+        for (String path : before.keySet()) if (!before.get(path).equals(files.get(path))) changed.add(path);
+        for (String path : files.keySet()) if (!files.get(path).equals(before.get(path))) changed.add(path);
+        var trees = new HashMap<>(old.trees());
+        for (String path : changed) {
+            trees.remove("");
+            for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1))
+                trees.remove(path.substring(0, slash));
+        }
+        try {
+            new Trees(db).write(files, trees);
+            return trees;
+        } catch (IOException unwritable) {
+            return Map.of(); // Optional cache: Git rebuilds the trees itself.
+        }
+    }
+
+    private static List<EntryRecord> withStats(Layout layout, ObjectsDb db, Parsed old, List<EntryRecord> records) {
         if (layout.root() == null) return records;
-        Map<String, EntryRecord> previous = readStage0AllowConflicts(layout.index());
+        Map<String, EntryRecord> previous = new HashMap<>();
+        for (EntryRecord rec : old.entries()) if (rec.stage() == 0) previous.put(rec.path(), rec);
         var work = new WorkingTree(layout.root(), db);
         var result = new ArrayList<EntryRecord>(records.size());
         for (EntryRecord rec : records) {
@@ -214,7 +299,7 @@ final class Index {
         return result;
     }
 
-    private static byte[] encodeRecords(List<EntryRecord> records) throws IOException {
+    private static byte[] encodeRecords(List<EntryRecord> records, Map<String, String> trees) throws IOException {
         boolean needsV3 = false;
         for (EntryRecord rec : records) {
             if (rec.intentToAdd()) { needsV3 = true; break; }
@@ -236,7 +321,7 @@ final class Index {
             boolean extended = rec.intentToAdd();
             int flags = Math.min(path.length, 0xfff) | ((rec.stage() & 3) << FLAG_STAGE_SHIFT);
             if (extended) flags |= FLAG_EXTENDED;
-            Stat stat = rec.stat() == null ? new Stat(0, 0, 0, 0, 0, 0, 0, 0, 0) : rec.stat();
+            Stat stat = rec.stat() == null ? new Stat(0, 0, 0, 0, 0, 0, 0, 0, 0, false) : rec.stat();
             out.writeInt(stat.ctimeSec());
             out.writeInt(stat.ctimeNsec());
             out.writeInt(stat.mtimeSec());
@@ -256,7 +341,42 @@ final class Index {
             int headerLen = extended ? 64 : 62;
             out.write(new byte[8 - ((headerLen + path.length) % 8)]);
         }
+        if (!trees.isEmpty()) {
+            var body = new ByteArrayOutputStream();
+            var dirs = new HashMap<String, int[]>(); // directory -> entry count
+            var children = new HashMap<String, Set<String>>();
+            for (EntryRecord rec : sorted) {
+                String path = rec.path();
+                dirs.computeIfAbsent("", k -> new int[1])[0]++;
+                for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+                    String dir = path.substring(0, slash);
+                    int parent = dir.lastIndexOf('/');
+                    children.computeIfAbsent(parent < 0 ? "" : dir.substring(0, parent), k -> new HashSet<>()).add(dir);
+                    dirs.computeIfAbsent(dir, k -> new int[1])[0]++;
+                }
+            }
+            writeTree(new DataOutputStream(body), "", dirs, children, trees);
+            out.writeInt(EXT_TREE);
+            out.writeInt(body.size());
+            body.writeTo(out);
+        }
         bytes.write(digest().digest(bytes.toByteArray()));
         return bytes.toByteArray();
     }
+
+    /** One cache-tree node, then its subdirectories in Git's order (shorter names first, then bytewise). */
+    private static void writeTree(DataOutputStream out, String dir, Map<String, int[]> dirs,
+                                  Map<String, Set<String>> children, Map<String, String> trees) throws IOException {
+        var subdirs = new ArrayList<>(children.getOrDefault(dir, Set.of()));
+        subdirs.sort(Comparator.comparingInt((String d) -> name(d).length).thenComparing(d -> name(d), Arrays::compareUnsigned));
+        String id = trees.get(dir);
+        int count = dirs.getOrDefault(dir, new int[1])[0];
+        out.write(name(dir));
+        out.write(0);
+        out.write(((id == null ? -1 : count) + " " + subdirs.size() + "\n").getBytes(UTF_8));
+        if (id != null) out.write(HEX.parseHex(id));
+        for (String sub : subdirs) writeTree(out, sub, dirs, children, trees);
+    }
+
+    private static byte[] name(String dir) { return dir.substring(dir.lastIndexOf('/') + 1).getBytes(UTF_8); }
 }

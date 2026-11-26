@@ -582,6 +582,8 @@ public final class Repository {
                     throw new IOException("Cannot amend an unborn branch");
                 }
                 var stage0 = new TreeMap<>(Index.readStage0(layout.index()));
+                // Read while the lock is held; commit -a republishes the index, so its old cache-tree no longer fits.
+                var cache = options.isAll() ? new HashMap<String, String>() : new HashMap<>(Index.cacheTree(layout.index()));
                 if (options.isAll()) {
                     new Staging(layout, db).stageUpdatedUnlocked(work, stage0, List.of());
                     index.publish(Index.encodeStage0(layout, db, stage0));
@@ -591,7 +593,8 @@ public final class Repository {
                 for (var e : stage0.entrySet()) {
                     if (!e.getValue().intentToAdd()) committedFiles.put(e.getKey(), e.getValue().entry());
                 }
-                String tree = trees.write(committedFiles);
+                // Without intent-to-add entries the index's cache-tree describes exactly these files.
+                String tree = trees.write(committedFiles, committedFiles.size() == stage0.size() ? cache : new HashMap<>());
 
                 List<String> parents;
                 String resolvedAuthor;
