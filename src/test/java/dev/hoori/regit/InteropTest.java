@@ -23,7 +23,8 @@ class InteropTest {
         root = tmp.resolve("agent");
         repo = Repository.init(root, "main");
     }
-    static String git(Path dir, String... args) throws Exception {
+    static String git(Path dir, String... args) throws Exception { return git(dir, Map.of(), args); }
+    static String git(Path dir, Map<String, String> env, String... args) throws Exception {
         var cmd = new ArrayList<>(List.of("git", "-C", dir.toString(), "-c", "commit.gpgsign=false"));
         cmd.addAll(List.of(args));
         var process = new ProcessBuilder(cmd).redirectErrorStream(true);
@@ -31,6 +32,7 @@ class InteropTest {
                 "GIT_AUTHOR_EMAIL", WHO.email(), "GIT_COMMITTER_EMAIL", WHO.email(),
                 "GIT_AUTHOR_DATE", WHO.when().toString(), "GIT_COMMITTER_DATE", WHO.when().toString(),
                 "GIT_CONFIG_NOSYSTEM", "1", "GIT_CONFIG_GLOBAL", "/dev/null", "LC_ALL", "C"));
+        process.environment().putAll(env);
         var child = process.start();
         String output = new String(child.getInputStream().readAllBytes(), UTF_8);
         assertEquals(0, child.waitFor(), () -> cmd + "\n" + output);
@@ -189,6 +191,181 @@ class InteropTest {
         git(root, "read-tree", "HEAD");
         assertEquals(ours, Index.cacheTree(index));
         git(root, "fsck", "--strict", "--no-dangling");
+    }
+    record Scan(String status, int directories) {}
+    /** {@code git status} and how many directories it had to read; Git's untracked cache is what keeps that low. */
+    Scan scan() throws Exception {
+        Path trace = tmp.resolve("trace");
+        Files.deleteIfExists(trace);
+        String status = git(root, Map.of("GIT_TRACE2_PERF", trace.toString()), "-c", "core.quotePath=false", "status", "--porcelain");
+        var opened = java.util.regex.Pattern.compile("opendir:(\\d+)").matcher(Files.readString(trace));
+        assertTrue(opened.find(), "no untracked cache");
+        return new Scan(status, Integer.parseInt(opened.group(1)));
+    }
+    /** Commits {@code tracked} paths, adds one untracked file next to each, and has Git cache all of them. */
+    void warmUntrackedCache(String... tracked) throws Exception {
+        for (String path : tracked) {
+            Files.createDirectories(root.resolve(path).getParent());
+            Files.writeString(root.resolve(path), "1");
+            Files.writeString(root.resolve(path + ".untracked"), "u");
+        }
+        repo.stage(tracked);
+        repo.commit("tracked\n", WHO, WHO);
+        git(root, "config", "core.untrackedCache", "true");
+        git(root, "update-index", "--untracked-cache");
+        Thread.sleep(1100); // so the directory stats the cache records are not racy against the index
+        git(root, "status");
+        assertEquals(0, scan().directories());
+    }
+    @Test void untrackedCacheSurvivesRegitWritesAndRescansOnlyWhatTheyChange() throws Exception {
+        Files.writeString(root.resolve("d"), "untracked file");
+        warmUntrackedCache("a/x", "a/b/y", "é/z", "c/z");
+        Files.writeString(root.resolve("a/x"), "2");
+        repo.stage("a/x"); // same paths: Git trusts every cached directory
+        Scan kept = scan();
+        assertEquals(0, kept.directories(), kept.status());
+        repo.stage("c/z.untracked"); // a new path: only the directories above it are read again
+        Scan changed = scan();
+        assertEquals("M  a/x\nA  c/z.untracked\n?? a/b/y.untracked\n?? a/x.untracked\n?? d\n?? é/z.untracked",
+                changed.status()); // not the stale "?? c/z.untracked"
+        assertEquals(2, changed.directories());
+        // A path leaves the index while its file stays (regit has no `rm --cached`, so write the records directly).
+        var layout = Layout.open(root);
+        var records = new ArrayList<>(Index.readAll(layout.index()));
+        records.removeIf(record -> record.path().equals("a/x"));
+        Files.write(layout.index(), Index.encodeRecords(layout, new ObjectsDb(layout.common()), records));
+        Scan removed = scan();
+        assertTrue(removed.status().lines().anyMatch("?? a/x"::equals), removed.status()); // untracked again
+        assertEquals(2, removed.directories());
+    }
+    @Test void untrackedCacheDirectoriesWithRacyStatsAreRescanned() throws Exception {
+        warmUntrackedCache("a/x", "b/y");
+        Path index = root.resolve(".git/index");
+        // Dated as if Git had written it before the directories were last scanned: their stats cannot be trusted.
+        Files.setLastModifiedTime(index, java.nio.file.attribute.FileTime.fromMillis(86400000));
+        Files.writeString(root.resolve("b/y"), "2");
+        repo.stage("b/y");
+        assertEquals(3, scan().directories());
+    }
+    @Test void racyUntrackedDirectoryIsRescannedWithItsParent() throws Exception {
+        commit("f", "1", "one");
+        Files.createDirectories(root.resolve("u"));
+        Files.writeString(root.resolve("u/a"), "a");
+        Thread.sleep(1100);
+        Files.writeString(root.resolve("u/b"), "b"); // u/ is now newer than the root directory
+        git(root, "config", "core.untrackedCache", "true");
+        git(root, "update-index", "--untracked-cache");
+        git(root, "status"); // caches u/ as a check-only directory listed as "u/" in the root
+        long u = Files.getLastModifiedTime(root.resolve("u")).toMillis() / 1000 * 1000;
+        // Dated in u/'s second: u/ is racy, the root is not.
+        Files.setLastModifiedTime(root.resolve(".git/index"), java.nio.file.attribute.FileTime.fromMillis(u));
+        Files.writeString(root.resolve("f"), "2");
+        repo.stage("f");
+        assertEquals("M  f\n?? u/", scan().status());
+    }
+    @Test void untrackedCacheOfManyDirectoriesIsReadAndWrittenBack() throws Exception {
+        String[] paths = new String[130]; // more than two bitmap words, as a run of valid directories
+        Arrays.setAll(paths, i -> "dir" + i + "/f");
+        warmUntrackedCache(paths);
+        Files.writeString(root.resolve("dir7/f"), "2");
+        repo.stage("dir7/f");
+        assertEquals(0, scan().directories());
+        repo.stage("dir9/f.untracked");
+        assertEquals(2, scan().directories());
+    }
+    /** A merge of topic into main that regit leaves conflicted on x and y, with an unrelated file "keep". */
+    String conflictedMerge() throws Exception {
+        commit("x", "base\n", "seed");
+        commit("y", "base\n", "seed");
+        commit("keep", "1", "seed");
+        repo.createBranch("topic");
+        repo.switchBranch("topic");
+        commit("x", "topic\n", "topic");
+        commit("y", "topic\n", "topic");
+        repo.switchBranch("main");
+        commit("x", "main\n", "main");
+        commit("y", "main\n", "main");
+        repo.merge("topic", WHO, "merge\n", MergeOptions.defaults().allowConflicts());
+        String conflicts = git(root, "ls-files", "-u");
+        assertEquals(6, conflicts.lines().count());
+        assertEquals("", git(root, "ls-files", "--resolve-undo"));
+        return conflicts;
+    }
+    @Test void conflictsResolvedThroughRegitCanStillBeUndoneByGit() throws Exception {
+        String conflicts = conflictedMerge();
+        Files.writeString(root.resolve("x"), "resolved\n");
+        repo.stage("x");
+        assertEquals(conflicts.lines().filter(line -> line.endsWith("\tx")).toList(),
+                git(root, "ls-files", "--resolve-undo").lines().toList());
+        Files.writeString(root.resolve("y"), "resolved\n");
+        Files.writeString(root.resolve("keep"), "2");
+        repo.stage("keep", "y"); // later writes keep what was recorded and add the new resolution
+        assertEquals(conflicts, git(root, "ls-files", "--resolve-undo"));
+        git(root, "checkout", "-m", "--", "x");
+        assertEquals(conflicts.lines().filter(line -> line.endsWith("\tx")).toList(), git(root, "ls-files", "-u").lines().toList());
+        assertTrue(Files.readString(root.resolve("x")).contains("<<<<<<<"));
+        assertEquals("resolved\n", Files.readString(root.resolve("y")));
+    }
+    @Test void damagedResolveUndoIsDroppedBeforeRecordingNewResolutions() throws Exception {
+        String conflicts = conflictedMerge();
+        appendExtension(root.resolve(".git/index"), "REUC", "z\0000\0000\0000\000".getBytes(UTF_8)); // no stages; Git rejects it as the last record
+        Files.writeString(root.resolve("x"), "resolved\n");
+        repo.stage("x");
+        assertEquals(conflicts.lines().filter(line -> line.endsWith("\tx")).toList(),
+                git(root, "ls-files", "--resolve-undo").lines().toList());
+    }
+    @Test void resolveUndoIsKeptByStagingAndCommitAllButNotByCheckout() throws Exception {
+        String conflicts = conflictedMerge();
+        git(root, "add", "x", "y"); // Git itself records the resolution, as it would for a Git merge
+        Files.writeString(root.resolve("keep"), "2");
+        repo.commitAll("merge\n", WHO);
+        assertEquals(conflicts, git(root, "ls-files", "--resolve-undo"));
+        repo.switchBranch("topic"); // like git checkout, which starts from the new tree
+        assertEquals("", git(root, "ls-files", "--resolve-undo"));
+        git(root, "status");
+    }
+    @Test void rebaseFinishedRightAfterAConflictKeepsItsResolveUndo() throws Exception {
+        commit("x", "base\n", "base");
+        repo.createBranch("topic");
+        commit("x", "main\n", "main");
+        repo.switchBranch("topic");
+        commit("x", "topic\n", "topic");
+        repo.rebase("main", WHO, RebaseOptions.defaults().allowConflicts());
+        String conflict = git(root, "ls-files", "-u");
+        Files.writeString(root.resolve("x"), "resolved\n");
+        repo.stage("x");
+        repo.continueRebase(WHO); // nothing left to pick, so Git would keep the index and its resolve-undo
+        assertEquals(conflict, git(root, "ls-files", "--resolve-undo"));
+    }
+    @Test void untrackedCacheIsDroppedWithTheFsmonitorDataItRelies() throws Exception {
+        warmUntrackedCache("a/x");
+        Path index = root.resolve(".git/index");
+        appendExtension(index, "FSMN", new byte[] {0, 0, 0, 2, '1', 0, 0, 0, 0, 0});
+        repo.stage("a/x.untracked");
+        assertFalse(new String(Files.readAllBytes(index), java.nio.charset.StandardCharsets.ISO_8859_1).contains("UNTR"));
+    }
+    @Test void otherOptionalIndexExtensionsAreDroppedAndMandatoryOnesRejected() throws Exception {
+        commit("f", "1", "one");
+        Path index = root.resolve(".git/index");
+        appendExtension(index, "FSMN", new byte[] {0, 0, 0, 2, '1', 0, 0, 0, 0, 0});
+        Files.writeString(root.resolve("f"), "2");
+        repo.stage("f"); // fsmonitor data would describe the old entries
+        assertFalse(new String(Files.readAllBytes(index), java.nio.charset.StandardCharsets.ISO_8859_1).contains("FSMN"));
+        assertEquals(git(root, "hash-object", "f"), git(root, "ls-files", "--format=%(objectname)"));
+        appendExtension(index, "link", new byte[20]);
+        var rejected = assertThrows(IOException.class, () -> repo.stage("f"));
+        assertEquals("Unsupported mandatory or invalid index extension", rejected.getMessage());
+    }
+    static void appendExtension(Path index, String signature, byte[] body) throws IOException {
+        byte[] old = Files.readAllBytes(index);
+        var out = new ByteArrayOutputStream();
+        out.write(old, 0, old.length - 20);
+        out.write(signature.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        out.write(java.nio.ByteBuffer.allocate(4).putInt(body.length).array());
+        out.write(body);
+        var sha = GitFiles.digest();
+        out.writeBytes(sha.digest(out.toByteArray()));
+        Files.write(index, out.toByteArray());
     }
     @Test void indexOnlyModeChangeIsSeenDespiteMatchingStat() throws Exception {
         commit("f", "content", "one");

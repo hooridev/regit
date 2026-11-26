@@ -145,7 +145,8 @@ final class Merges {
                         : (c.theirs() != null ? c.theirs().mode() : Entry.FILE);
                 work.writeRaw(e.getKey(), c.worktreeContent(), mode);
             }
-            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts(), written)));
+            index.publish(Index.encodeWithTrees(layout, db,
+                    Index.combineWithConflicts(outcome.resolved(), outcome.conflicts(), written), false).bytes());
             Files.writeString(layout.admin().resolve("ORIG_HEAD"), oldHead + "\n");
             Files.writeString(layout.admin().resolve("MERGE_HEAD"), mergeHead + "\n");
             Files.writeString(layout.admin().resolve("MERGE_MSG"), mergeMsg);
