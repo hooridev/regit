@@ -9,13 +9,20 @@ import static dev.hoori.regit.GitFiles.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 
-/** Reads and writes Git index v2 and v3 (including {@code intent-to-add} and merge conflict stages 1..3). */
+/**
+ * Reads and writes Git index v2 and v3 (including {@code intent-to-add} and merge conflict stages 1..3). Of the
+ * optional extensions only {@code TREE}, {@code REUC} and {@code UNTR} are kept, each one rewritten to fit the new
+ * entries. The rest ({@code FSMN}, {@code EOIE}, {@code IEOT}, ...) describe the old entries or file layout and are
+ * dropped; Git rebuilds them. Mandatory extensions (lowercase, e.g. split index {@code link}) are rejected.
+ */
 final class Index {
     private static final int FLAG_EXTENDED = 0x4000;
     private static final int FLAG_STAGE_MASK = 0x3000;
     private static final int FLAG_STAGE_SHIFT = 12;
     private static final int EXT_INTENT_TO_ADD = 0x2000;
     private static final int EXT_TREE = 0x54524545; // "TREE", Git's cache-tree extension
+    private static final int EXT_RESOLVE_UNDO = 0x52455543; // "REUC": the stages of conflicts resolved since
+    private static final int EXT_UNTRACKED = 0x554e5452; // "UNTR", Git's untracked cache
     static final String EMPTY_BLOB_ID = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
     /** {@code stat} is the cached lstat data Git compares to skip rehashing; null means unknown (written as zeros). */
@@ -69,12 +76,16 @@ final class Index {
     /** Directories ("" is the root) whose tree id the index's cache-tree holds as valid. */
     static Map<String, String> cacheTree(Path file) throws IOException { return parse(file).trees(); }
 
-    private record Parsed(List<EntryRecord> entries, Map<String, String> trees) {}
+    /** {@code undo} maps a path to the conflict stages 1..3 (null when absent) that its resolution replaced. */
+    private record Parsed(List<EntryRecord> entries, Map<String, String> trees, Map<String, Entry[]> undo,
+                          byte[] untracked, long written) {}
 
     private static Parsed parse(Path file) throws IOException {
         var entries = new ArrayList<EntryRecord>();
         var trees = new HashMap<String, String>();
-        if (!Files.exists(file)) return new Parsed(entries, trees);
+        var undo = new TreeMap<String, Entry[]>(Entry.BYTE_ORDER);
+        byte[] untracked = null;
+        if (!Files.exists(file)) return new Parsed(entries, trees, undo, null, 0);
         // Time first: if the index is replaced meanwhile, an older time only marks more stats racy.
         FileTime written = Files.getLastModifiedTime(file);
         byte[] bytes = Files.readAllBytes(file);
@@ -134,10 +145,36 @@ final class Index {
                 } catch (IOException | RuntimeException damaged) {
                     trees.clear(); // Optional cache: without it trees are just recomputed.
                 }
+            } else if (signature == EXT_RESOLVE_UNDO) {
+                try {
+                    int[] at = {buf.position()};
+                    readResolveUndo(bytes, at, buf.position() + size, undo);
+                } catch (IOException | RuntimeException damaged) {
+                    undo.clear(); // Optional: it only lets Git undo a resolution.
+                }
+            } else if (signature == EXT_UNTRACKED) {
+                untracked = Arrays.copyOfRange(bytes, buf.position(), buf.position() + size);
             }
             buf.position(buf.position() + size);
         }
-        return new Parsed(entries, trees);
+        return new Parsed(entries, trees, undo, untracked, written.toInstant().getEpochSecond());
+    }
+
+    private static void readResolveUndo(byte[] bytes, int[] at, int end, Map<String, Entry[]> undo) throws IOException {
+        while (at[0] < end) {
+            String path = token(bytes, at, end, (byte) 0);
+            path(path);
+            int[] modes = new int[3];
+            for (int i = 0; i < 3; i++) modes[i] = Integer.parseInt(token(bytes, at, end, (byte) 0), 8);
+            var stages = new Entry[3];
+            for (int i = 0; i < 3; i++) {
+                if (modes[i] == 0) continue;
+                if (at[0] + 20 > end) throw new IOException("Truncated resolve-undo");
+                stages[i] = new Entry(modes[i], HEX.formatHex(bytes, at[0], at[0] + 20));
+                at[0] += 20;
+            }
+            undo.put(path, stages);
+        }
     }
 
     private static void readTree(byte[] bytes, int[] at, int end, String parent, Map<String, String> trees)
@@ -245,7 +282,7 @@ final class Index {
         for (var e : files.entrySet()) {
             list.add(new EntryRecord(e.getKey(), e.getValue(), 0, false, written.get(e.getKey())));
         }
-        return encodeRecords(layout, db, list);
+        return encodeWithTrees(layout, db, list, false).bytes();
     }
 
     static byte[] encodeStage0(Layout layout, ObjectsDb db, Map<String, EntryRecord> files) throws IOException {
@@ -266,9 +303,63 @@ final class Index {
      * is returned too, so a caller still holding the index lock can reuse it instead of rereading a newer index.
      */
     static Encoded encodeWithTrees(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
+        return encodeWithTrees(layout, db, records, true);
+    }
+
+    /**
+     * {@code keepResolveUndo} is true for changes to the current index (staging, {@code commit -a}), which keep the
+     * resolve-undo data and add the conflicts they resolve, and false for an index rebuilt from trees (checkout,
+     * merge, rebase), which starts without it, like Git's unpack-trees.
+     */
+    static Encoded encodeWithTrees(Layout layout, ObjectsDb db, List<EntryRecord> records, boolean keepResolveUndo)
+            throws IOException {
         Parsed old = parse(layout.index());
         var trees = cacheTree(db, old, records);
-        return new Encoded(encodeRecords(withStats(layout, db, old, records), trees), trees);
+        return new Encoded(encodeRecords(withStats(layout, db, old, records), trees,
+                keepResolveUndo ? resolveUndo(old, records) : null, untracked(old, records)), trees);
+    }
+
+    /** The old resolve-undo data plus the stages of every conflict these records resolve (by staging or removing it). */
+    private static byte[] resolveUndo(Parsed old, List<EntryRecord> records) {
+        var conflicted = new HashSet<String>();
+        for (EntryRecord rec : records) if (rec.stage() != 0) conflicted.add(rec.path());
+        var undo = new TreeMap<String, Entry[]>(Entry.BYTE_ORDER);
+        for (EntryRecord rec : old.entries()) {
+            if (rec.stage() != 0 && !conflicted.contains(rec.path()))
+                undo.computeIfAbsent(rec.path(), path -> new Entry[3])[rec.stage() - 1] = rec.entry();
+        }
+        // A path still in conflict is not resolved, so what was recorded for it no longer applies.
+        old.undo().forEach((path, stages) -> { if (!conflicted.contains(path)) undo.putIfAbsent(path, stages); });
+        var out = new ByteArrayOutputStream();
+        for (var item : undo.entrySet()) {
+            out.writeBytes(item.getKey().getBytes(UTF_8));
+            out.write(0);
+            for (Entry stage : item.getValue()) {
+                out.writeBytes((stage == null ? "0" : Integer.toOctalString(stage.mode())).getBytes(UTF_8));
+                out.write(0);
+            }
+            for (Entry stage : item.getValue()) if (stage != null) out.writeBytes(HEX.parseHex(stage.hash()));
+        }
+        return out.toByteArray();
+    }
+
+    /** The untracked cache with the directories where a path was added or removed marked for rescanning. */
+    private static byte[] untracked(Parsed old, List<EntryRecord> records) {
+        if (old.untracked() == null) return null;
+        var before = new HashSet<String>(old.entries().size());
+        for (EntryRecord rec : old.entries()) before.add(rec.path());
+        var after = new HashSet<String>(records.size());
+        for (EntryRecord rec : records) after.add(rec.path());
+        var changed = new HashSet<String>();
+        for (String path : before) if (!after.contains(path)) changed.add(path);
+        for (String path : after) if (!before.contains(path)) changed.add(path);
+        var dirs = new HashSet<String>();
+        for (String path : changed) {
+            dirs.add("");
+            for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1))
+                dirs.add(path.substring(0, slash));
+        }
+        return UntrackedCache.forget(old.untracked(), dirs, old.written());
     }
 
     /** Tree ids for every directory, reusing the old cache-tree where nothing beneath a directory changed. */
@@ -325,7 +416,8 @@ final class Index {
         return result;
     }
 
-    private static byte[] encodeRecords(List<EntryRecord> records, Map<String, String> trees) throws IOException {
+    private static byte[] encodeRecords(List<EntryRecord> records, Map<String, String> trees, byte[] resolveUndo,
+                                        byte[] untracked) throws IOException {
         boolean needsV3 = false;
         for (EntryRecord rec : records) {
             if (rec.intentToAdd()) { needsV3 = true; break; }
@@ -386,8 +478,17 @@ final class Index {
             out.writeInt(body.size());
             body.writeTo(out);
         }
+        extension(out, EXT_RESOLVE_UNDO, resolveUndo);
+        extension(out, EXT_UNTRACKED, untracked);
         bytes.write(digest().digest(bytes.toByteArray()));
         return bytes.toByteArray();
+    }
+
+    private static void extension(DataOutputStream out, int signature, byte[] body) throws IOException {
+        if (body == null || body.length == 0) return;
+        out.writeInt(signature);
+        out.writeInt(body.length);
+        out.write(body);
     }
 
     /** One cache-tree node, then its subdirectories in Git's order (shorter names first, then bytewise). */

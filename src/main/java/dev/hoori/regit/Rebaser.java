@@ -263,7 +263,8 @@ final class Rebaser {
                         : (c.theirs() != null ? c.theirs().mode() : Entry.FILE);
                 work.writeRaw(e.getKey(), c.worktreeContent(), mode);
             }
-            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts(), written)));
+            index.publish(Index.encodeWithTrees(layout, db,
+                    Index.combineWithConflicts(outcome.resolved(), outcome.conflicts(), written), false).bytes());
             head.publish(currentTip + "\n");
 
             Path stateDir = layout.admin().resolve(STATE_DIR);
