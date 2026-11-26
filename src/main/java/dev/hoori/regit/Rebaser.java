@@ -134,8 +134,8 @@ final class Rebaser {
             Map<String, Entry> origFiles = snapshot(db, trees, origHead);
             var tracked = new HashSet<String>(origFiles.keySet());
             for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
-            work.forceReset(tracked, origFiles);
-            index.publish(Index.encode(layout, db, origFiles));
+            var written = work.forceReset(tracked, origFiles);
+            index.publish(Index.encode(layout, db, origFiles, written));
             if (headName.startsWith("refs/heads/")) {
                 String branch = headName.substring(11);
                 try (var ref = new Lock(layout.ref(branch))) {
@@ -224,8 +224,8 @@ final class Rebaser {
                 try (var index = new Lock(layout.index())) {
                     var tracked = new HashSet<String>(currentTree.keySet());
                     for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
-                    work.forceReset(tracked, currentTree);
-                    index.publish(Index.encode(layout, db, currentTree));
+                    var written = work.forceReset(tracked, currentTree);
+                    index.publish(Index.encode(layout, db, currentTree, written));
                     if (ref != null) {
                         ref.publish(finalTip + "\n");
                         head.publish("ref: " + headName + "\n");
@@ -256,14 +256,14 @@ final class Rebaser {
             var tracked = new HashSet<String>(currentTree.keySet());
             for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
             tracked.removeAll(outcome.conflicts().keySet());
-            work.forceReset(tracked, outcome.resolved());
+            var written = work.forceReset(tracked, outcome.resolved());
             for (var e : outcome.conflicts().entrySet()) {
                 ThreeWay.Conflict c = e.getValue();
                 int mode = c.ours() != null ? c.ours().mode()
                         : (c.theirs() != null ? c.theirs().mode() : Entry.FILE);
                 work.writeRaw(e.getKey(), c.worktreeContent(), mode);
             }
-            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts())));
+            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts(), written)));
             head.publish(currentTip + "\n");
 
             Path stateDir = layout.admin().resolve(STATE_DIR);
@@ -449,9 +449,9 @@ final class Rebaser {
             var staged = Index.readStage0(layout.index());
             if (!Index.matches(staged, from)) throw new IOException("Index contains staged changes");
             var to = snapshot(db, trees, newTip);
-            work.checkout(from, to, staged, () -> {
+            work.checkout(from, to, staged, written -> {
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
-                index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
+                index.publish(Index.encode(layout, db, to, written)); // after checkout, so stat data matches the new files
                 try { publish.run(); }
                 catch (IOException failure) {
                     try (var restore = new Lock(layout.index())) {
