@@ -113,6 +113,14 @@ class InteropTest {
         assertTrue(tree.contains(git(root, "hash-object", "a/side")), tree);
         git(root, "fsck", "--strict", "--no-dangling");
     }
+    @Test void indexOnlyModeChangeIsSeenDespiteMatchingStat() throws Exception {
+        commit("f", "content", "one");
+        Thread.sleep(1100); // so the stat Git writes next is not racy
+        git(root, "update-index", "--chmod=+x", "f");
+        assertEquals(Map.of("f", Status.Change.MODIFIED), repo.status().unstaged());
+        repo.stage("f");
+        assertEquals("100644", git(root, "ls-files", "-s", "f").substring(0, 6));
+    }
     @Test void sameSizeEditRightAfterStagingIsStillSeen() throws Exception {
         Files.writeString(root.resolve("f"), "aaaa");
         repo.stage("f");

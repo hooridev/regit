@@ -26,8 +26,12 @@ final class Index {
         boolean unchanged(Stat now) { return stat != null && stage == 0 && !intentToAdd && stat.equals(now); }
     }
 
-    /** lstat fields in Git's index layout (32-bit, truncated like Git does). */
-    record Stat(int ctimeSec, int ctimeNsec, int mtimeSec, int mtimeNsec, int dev, int ino, int uid, int gid, int size) {
+    /**
+     * lstat fields in Git's index layout (32-bit, truncated like Git does). {@code executable} is not stored: read
+     * from the index it is the entry's mode, so equal stats also mean the file still has the indexed mode.
+     */
+    record Stat(int ctimeSec, int ctimeNsec, int mtimeSec, int mtimeNsec, int dev, int ino, int uid, int gid, int size,
+                boolean executable) {
         /** Stat of a regular file, or null when it is missing or not a regular file. */
         static Stat of(Path file) throws IOException {
             Map<String, Object> a;
@@ -41,7 +45,9 @@ final class Index {
             var mtime = ((FileTime) a.get("lastModifiedTime")).toInstant();
             return new Stat((int) ctime.getEpochSecond(), ctime.getNano(), (int) mtime.getEpochSecond(), mtime.getNano(),
                     (int) number(a, "dev"), (int) number(a, "ino"), (int) number(a, "uid"), (int) number(a, "gid"),
-                    (int) number(a, "size"));
+                    (int) number(a, "size"), a.get("permissions") instanceof Set<?> permissions
+                            ? permissions.contains(java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE)
+                            : Files.isExecutable(file)); // same rule as WorkingTree.inspect
         }
 
         private static long number(Map<String, Object> attributes, String key) {
@@ -105,7 +111,7 @@ final class Index {
             path(name);
             var stat = new Stat(buf.getInt(start), buf.getInt(start + 4), buf.getInt(start + 8), buf.getInt(start + 12),
                     buf.getInt(start + 16), buf.getInt(start + 20), buf.getInt(start + 28), buf.getInt(start + 32),
-                    buf.getInt(start + 36));
+                    buf.getInt(start + 36), mode == Entry.EXEC);
             // A racily clean stat must not survive into a newer index, where Git would trust it.
             entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd, stat.racy(written) ? null : stat));
             buf.position(next);
@@ -312,7 +318,7 @@ final class Index {
             boolean extended = rec.intentToAdd();
             int flags = Math.min(path.length, 0xfff) | ((rec.stage() & 3) << FLAG_STAGE_SHIFT);
             if (extended) flags |= FLAG_EXTENDED;
-            Stat stat = rec.stat() == null ? new Stat(0, 0, 0, 0, 0, 0, 0, 0, 0) : rec.stat();
+            Stat stat = rec.stat() == null ? new Stat(0, 0, 0, 0, 0, 0, 0, 0, 0, false) : rec.stat();
             out.writeInt(stat.ctimeSec());
             out.writeInt(stat.ctimeNsec());
             out.writeInt(stat.mtimeSec());
