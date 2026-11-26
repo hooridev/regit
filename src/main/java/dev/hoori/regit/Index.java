@@ -252,13 +252,23 @@ final class Index {
         return encodeRecords(layout, db, new ArrayList<>(files.values()));
     }
 
+    /** Index bytes and the cache-tree they hold: directories ("" is the root) to tree ids, empty when there is none. */
+    record Encoded(byte[] bytes, Map<String, String> trees) {}
+
+    /** {@link #encodeWithTrees} without the cache-tree. */
+    static byte[] encodeRecords(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
+        return encodeWithTrees(layout, db, records).bytes();
+    }
+
     /**
      * Encode with stat data valid for the current worktree, like {@code git update-index --refresh}, so Git need not
-     * rehash, and with a cache-tree, so Git and {@link Trees} need not rebuild unchanged directories.
+     * rehash, and with a cache-tree, so Git and {@link Trees} need not rebuild unchanged directories. The cache-tree
+     * is returned too, so a caller still holding the index lock can reuse it instead of rereading a newer index.
      */
-    static byte[] encodeRecords(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
+    static Encoded encodeWithTrees(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
         Parsed old = parse(layout.index());
-        return encodeRecords(withStats(layout, db, old, records), cacheTree(db, old, records));
+        var trees = cacheTree(db, old, records);
+        return new Encoded(encodeRecords(withStats(layout, db, old, records), trees), trees);
     }
 
     /** Tree ids for every directory, reusing the old cache-tree where nothing beneath a directory changed. */

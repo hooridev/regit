@@ -151,6 +151,45 @@ class InteropTest {
         repo.commit("two\n", WHO, WHO);
         git(root, "fsck", "--strict", "--no-dangling");
     }
+    @Test void commitAllTakesItsTreesFromTheCacheTreeItWrites() throws Exception {
+        commit("b", "1", "zero");
+        commit("a/x", "1", "one");
+        String stale = git(root, "rev-parse", "HEAD:a");
+        commit("a/x", "2", "two");
+        // Plant an existing but stale id for the unchanged "a": only trees taken from the cache-tree can contain it.
+        Path index = root.resolve(".git/index");
+        byte[] bytes = Files.readAllBytes(index);
+        var latin1 = java.nio.charset.StandardCharsets.ISO_8859_1;
+        int at = new String(bytes, latin1).indexOf(new String(HexFormat.of().parseHex(Index.cacheTree(index).get("a")), latin1));
+        System.arraycopy(HexFormat.of().parseHex(stale), 0, bytes, at, 20);
+        var sha = GitFiles.digest();
+        sha.update(bytes, 0, bytes.length - 20);
+        System.arraycopy(sha.digest(), 0, bytes, bytes.length - 20, 20);
+        Files.write(index, bytes);
+        assertEquals(stale, Index.cacheTree(index).get("a"));
+
+        Files.writeString(root.resolve("b"), "2");
+        repo.commitAll("all\n", WHO);
+        assertEquals(stale, git(root, "rev-parse", "HEAD:a"));
+        assertEquals(git(root, "rev-parse", "HEAD^{tree}"), Index.cacheTree(index).get(""));
+    }
+    @Test void commitAllBuildsCorrectTreesWhenTheIndexHadNoCacheTree() throws Exception {
+        commit("a/x", "1", "one");
+        Files.writeString(root.resolve("a/new"), "n");
+        repo.stageIntentToAdd("a/new");
+        Path index = root.resolve(".git/index");
+        assertEquals(Map.of(), Index.cacheTree(index)); // intent-to-add entries leave the index without one
+        Files.writeString(root.resolve("a/x"), "2");
+        repo.commitAll("all\n", WHO);
+        String tree = git(root, "ls-tree", "-r", "--format=%(objectmode) %(objectname) %(path)", "HEAD");
+        assertEquals(git(root, "ls-files", "--format=%(objectmode) %(objectname) %(path)"), tree);
+        assertTrue(tree.contains(git(root, "hash-object", "a/new")), tree); // -a stages intent-to-add content, as Git does
+        var ours = Index.cacheTree(index);
+        assertEquals(git(root, "rev-parse", "HEAD^{tree}"), ours.get(""));
+        git(root, "read-tree", "HEAD");
+        assertEquals(ours, Index.cacheTree(index));
+        git(root, "fsck", "--strict", "--no-dangling");
+    }
     @Test void indexOnlyModeChangeIsSeenDespiteMatchingStat() throws Exception {
         commit("f", "content", "one");
         Thread.sleep(1100); // so the stat Git writes next is not racy
