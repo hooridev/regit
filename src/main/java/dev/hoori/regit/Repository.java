@@ -591,7 +591,9 @@ public final class Repository {
                 for (var e : stage0.entrySet()) {
                     if (!e.getValue().intentToAdd()) committedFiles.put(e.getKey(), e.getValue().entry());
                 }
-                String tree = trees.write(committedFiles);
+                // Without intent-to-add entries the index's cache-tree describes exactly these files.
+                String tree = trees.write(committedFiles, committedFiles.size() == stage0.size()
+                        ? new HashMap<>(Index.cacheTree(layout.index())) : new HashMap<>());
 
                 List<String> parents;
                 String resolvedAuthor;

@@ -90,6 +90,38 @@ class InteropTest {
         assertEquals("a", git(tmp.resolve("linked"), "diff-files", "--name-only"));
         assertEquals(Map.of("a", Status.Change.MODIFIED), linked.status().unstaged());
     }
+    @Test void cacheTreeIsSharedCorrectlyWithGit() throws Exception {
+        commit("top", "t", "one");
+        commit("a/b/deep", "d", "two");
+        commit("a/side", "s", "three");
+        Path index = root.resolve(".git/index");
+        var ours = Index.cacheTree(index);
+        assertEquals(git(root, "rev-parse", "HEAD^{tree}"), ours.get(""));
+        git(root, "read-tree", "HEAD"); // Git builds its own cache-tree for the same tree
+        assertEquals(ours, Index.cacheTree(index));
+
+        Files.writeString(root.resolve("a/b/deep"), "changed");
+        repo.stage("a/b/deep");
+        git(root, "commit", "-q", "-m", "native"); // Git takes its trees from regit's cache-tree
+        assertEquals(git(root, "hash-object", "a/b/deep"), git(root, "rev-parse", "HEAD:a/b/deep"));
+
+        Files.writeString(root.resolve("a/side"), "edited");
+        repo.stage("a/side");
+        repo.commit("regit\n", WHO, WHO); // regit takes its trees from the cache-tree Git left
+        String tree = git(root, "ls-tree", "-r", "--format=%(objectmode) %(objectname) %(path)", "HEAD");
+        assertEquals(git(root, "ls-files", "--format=%(objectmode) %(objectname) %(path)"), tree);
+        assertTrue(tree.contains(git(root, "hash-object", "a/side")), tree);
+        git(root, "fsck", "--strict", "--no-dangling");
+    }
+    @Test void sameSizeEditRightAfterStagingIsStillSeen() throws Exception {
+        Files.writeString(root.resolve("f"), "aaaa");
+        repo.stage("f");
+        Files.writeString(root.resolve("f"), "bbbb"); // same mtime on coarse-timestamp filesystems: only the racy rule sees it
+        assertEquals(Map.of("f", Status.Change.MODIFIED), repo.status().unstaged());
+        assertEquals("f", git(root, "diff-files", "--name-only"));
+        repo.stageUpdated();
+        assertEquals("bbbb", git(root, "show", ":f"));
+    }
     @Test void indexIsDatedToItsLockSoGitRechecksFilesStatedUnderIt() throws Exception {
         Path index = tmp.resolve("index");
         try (var lock = new GitFiles.Lock(index)) {

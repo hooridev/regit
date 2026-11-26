@@ -28,6 +28,12 @@ final class WorkingTree {
         return new Entry(executable ? Entry.EXEC : Entry.FILE, db.blob(file, stage));
     }
 
+    /** Like {@code inspect(name, false)}, but trusts {@code known} without hashing while the file keeps its stat, as Git does. */
+    Entry inspect(String name, Index.EntryRecord known) throws IOException {
+        if (known != null && known.unchanged(Index.Stat.of(resolve(name)))) return known.entry();
+        return inspect(name, false);
+    }
+
     @FunctionalInterface interface Publish { void run() throws IOException; }
 
     /** Preflight the entire delta, then journal each successful replacement for rollback. */

@@ -77,7 +77,7 @@ public record Status(SortedMap<String, Change> staged, SortedMap<String, Change>
                         unstaged.put(path, Change.ADDED);
                     } else if (!attrs.isRegularFile()) {
                         unstaged.put(path, Change.TYPE_CHANGED);
-                    } else if (!rec.entry().equals(work.inspect(path, false))) {
+                    } else if (!rec.entry().equals(work.inspect(path, rec))) {
                         unstaged.put(path, Change.MODIFIED);
                     }
                 } else if ((attrs.isRegularFile() || attrs.isSymbolicLink()) && !ignore.excludes(file, false))

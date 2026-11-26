@@ -32,7 +32,7 @@ final class Staging {
                     throw new IOException("Ignored path: " + path);
             }
             for (String path : paths) {
-                var inspected = stage(work, path);
+                var inspected = stage(work, path, entries.get(path));
                 boolean hadConflict = conflicts.remove(path) != null;
                 if (inspected != null) {
                     putEntry(entries, path, inspected);
@@ -70,7 +70,7 @@ final class Staging {
                 if (Files.isDirectory(file, NOFOLLOW_LINKS)) {
                     stageAllUnlocked(work, entries, conflicts, ignore, List.of(target));
                 } else {
-                    var inspected = stage(work, target);
+                    var inspected = stage(work, target, entries.get(target));
                     boolean hadConflict = conflicts.remove(target) != null;
                     if (inspected != null) {
                         putEntry(entries, target, inspected);
@@ -143,7 +143,7 @@ final class Staging {
         var existingPaths = new ArrayList<>(entries.keySet());
         for (String path : existingPaths) {
             if (!matchesFilter(path, filters)) continue;
-            var inspected = stage(work, path);
+            var inspected = stage(work, path, entries.get(path));
             if (inspected == null) {
                 entries.remove(path);
             } else {
@@ -181,7 +181,7 @@ final class Staging {
                 if (!matchesFilter(rel, filters)) return FileVisitResult.CONTINUE;
                 if (entries.containsKey(rel) || conflicts.containsKey(rel)) return FileVisitResult.CONTINUE;
                 if (ignore.excludes(file, false)) return FileVisitResult.CONTINUE;
-                var inspected = stage(work, rel);
+                var inspected = stage(work, rel, null);
                 if (inspected != null) {
                     putEntry(entries, rel, inspected);
                 }
@@ -196,14 +196,18 @@ final class Staging {
         for (String path : new ArrayList<>(conflicts.keySet())) {
             if (!matchesFilter(path, filters)) continue;
             conflicts.remove(path);
-            var inspected = stage(work, path);
+            var inspected = stage(work, path, entries.get(path));
             if (inspected != null) putEntry(entries, path, inspected);
         }
     }
 
-    /** Store a worktree file; its stat is taken before hashing, so the index write need not hash it again. */
-    private static Index.EntryRecord stage(WorkingTree work, String path) throws IOException {
+    /**
+     * Store a worktree file, or keep {@code known} while the file has its stat. The stat is taken before hashing,
+     * so the index write need not hash the file again.
+     */
+    private static Index.EntryRecord stage(WorkingTree work, String path, Index.EntryRecord known) throws IOException {
         Index.Stat stat = Index.Stat.of(work.resolve(path));
+        if (known != null && known.unchanged(stat)) return known;
         Entry entry = work.inspect(path, true);
         return entry == null ? null : new Index.EntryRecord(path, entry, 0, false, stat);
     }

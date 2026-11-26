@@ -52,7 +52,13 @@ final class Trees {
         final Map<String, Directory> children = new HashMap<>();
         final Map<String, Entry> files = new TreeMap<>(Entry.BYTE_ORDER);
     }
-    String write(Map<String, Entry> files) throws IOException {
+    String write(Map<String, Entry> files) throws IOException { return write(files, new HashMap<>()); }
+
+    /**
+     * Write the tree for {@code files}. {@code cache} maps directories ("" is the root) to tree ids known to match
+     * them, which are reused, and receives the id of every directory.
+     */
+    String write(Map<String, Entry> files, Map<String, String> cache) throws IOException {
         var root = new Directory();
         for (var item : files.entrySet()) {
             String[] parts = item.getKey().split("/");
@@ -61,13 +67,16 @@ final class Trees {
                 dir = dir.children.computeIfAbsent(parts[i], ignored -> new Directory());
             dir.files.put(parts[parts.length - 1], item.getValue());
         }
-        return write(root);
+        return write(root, "", cache);
     }
-    private String write(Directory dir) throws IOException {
+    private String write(Directory dir, String path, Map<String, String> cache) throws IOException {
         for (var child : dir.children.entrySet()) {
             if (dir.files.containsKey(child.getKey())) throw new IOException("File/directory conflict: " + child.getKey());
-            dir.files.put(child.getKey() + "/", new Entry(Entry.TREE, write(child.getValue())));
+            String childPath = path.isEmpty() ? child.getKey() : path + "/" + child.getKey();
+            dir.files.put(child.getKey() + "/", new Entry(Entry.TREE, write(child.getValue(), childPath, cache)));
         }
+        String known = cache.get(path);
+        if (known != null) return known;
         var output = new ByteArrayOutputStream();
         for (var item : dir.files.entrySet()) {
             var entry = item.getValue();
@@ -76,6 +85,8 @@ final class Trees {
             output.write((Integer.toOctalString(entry.mode()) + " " + name + "\0").getBytes(UTF_8));
             output.write(HEX.parseHex(entry.hash()));
         }
-        return db.put("tree", output.toByteArray());
+        String id = db.put("tree", output.toByteArray());
+        cache.put(path, id);
+        return id;
     }
 }
