@@ -113,6 +113,21 @@ class InteropTest {
         assertTrue(tree.contains(git(root, "hash-object", "a/side")), tree);
         git(root, "fsck", "--strict", "--no-dangling");
     }
+    @Test void smudgedIndexEntryIsNotTrusted() throws Exception {
+        commit("f", "abc", "one");
+        Thread.sleep(1100);
+        repo.stage("f"); // rewrites the index a second later, so the stat is not racy, only smudged below
+        Path index = root.resolve(".git/index");
+        assertNotNull(Index.readAll(index).getFirst().stat());
+        byte[] bytes = Files.readAllBytes(index);
+        java.nio.ByteBuffer.wrap(bytes).putInt(12 + 36, 0); // first entry's size, as Git smudges it
+        var sha = GitFiles.digest();
+        sha.update(bytes, 0, bytes.length - 20);
+        System.arraycopy(sha.digest(), 0, bytes, bytes.length - 20, 20);
+        Files.write(index, bytes);
+        Files.setLastModifiedTime(index, java.nio.file.attribute.FileTime.from(java.time.Instant.now()));
+        assertNull(Index.readAll(index).getFirst().stat());
+    }
     @Test void commitRebuildsCachedTreesThatAreMissing() throws Exception {
         commit("a/x", "1", "one");
         Files.writeString(root.resolve("a/x"), "2");

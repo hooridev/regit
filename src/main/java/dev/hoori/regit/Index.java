@@ -113,8 +113,10 @@ final class Index {
             var stat = new Stat(buf.getInt(start), buf.getInt(start + 4), buf.getInt(start + 8), buf.getInt(start + 12),
                     buf.getInt(start + 16), buf.getInt(start + 20), buf.getInt(start + 28), buf.getInt(start + 32),
                     buf.getInt(start + 36), mode == Entry.EXEC);
-            // A racily clean stat must not survive into a newer index, where Git would trust it.
-            entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd, stat.racy(written) ? null : stat));
+            // A racily clean stat must not survive into a newer index, where Git would trust it. Size 0 with a
+            // nonempty blob is how Git marks ("smudges") an entry whose content must be checked.
+            boolean unknown = stat.racy(written) || (stat.size() == 0 && !hash.equals(EMPTY_BLOB_ID));
+            entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd, unknown ? null : stat));
             buf.position(next);
         }
         while (buf.hasRemaining()) {
