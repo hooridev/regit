@@ -90,6 +90,15 @@ class InteropTest {
         assertEquals("a", git(tmp.resolve("linked"), "diff-files", "--name-only"));
         assertEquals(Map.of("a", Status.Change.MODIFIED), linked.status().unstaged());
     }
+    @Test void indexIsDatedToItsLockSoGitRechecksFilesStatedUnderIt() throws Exception {
+        Path index = tmp.resolve("index");
+        try (var lock = new GitFiles.Lock(index)) {
+            var locked = Files.getLastModifiedTime(tmp.resolve("index.lock"));
+            Thread.sleep(1100); // cross a second boundary, as a slow stage or checkout would
+            lock.publish(new byte[0]);
+            assertEquals(locked, Files.getLastModifiedTime(index));
+        }
+    }
     @Test void canonicalCommitIndexAndDeletion() throws Exception {
         for (String path : List.of("a.c", "a/nested", "ö")) {
             Files.createDirectories(root.resolve(path).getParent());

@@ -2,6 +2,7 @@ package dev.hoori.regit;
 
 import java.io.*;
 import java.nio.file.*;
+import java.nio.file.attribute.FileTime;
 import java.security.*;
 import java.util.HexFormat;
 import static java.nio.file.StandardCopyOption.*;
@@ -42,15 +43,20 @@ final class GitFiles {
     /** Git-compatible exclusive lock with atomic publication on the same filesystem. */
     static final class Lock implements AutoCloseable {
         private final Path target, lock;
+        private final FileTime created;
         private boolean owned = true;
         Lock(Path target) throws IOException {
             this.target = target;
             Files.createDirectories(target.getParent());
             lock = Files.createFile(target.resolveSibling(target.getFileName() + ".lock"));
+            created = Files.getLastModifiedTime(lock);
         }
         void publish(String text) throws IOException { publish(text.getBytes(UTF_8)); }
         void publish(byte[] bytes) throws IOException {
             Files.write(lock, bytes);
+            // Index stats are read under this lock; dating the index to the lock makes Git recheck any
+            // file whose mtime falls in or after that second, so an edit right after our stat is not missed.
+            if (target.getFileName().toString().equals("index")) Files.setLastModifiedTime(lock, created);
             Files.move(lock, target, ATOMIC_MOVE, REPLACE_EXISTING);
             owned = false;
         }
