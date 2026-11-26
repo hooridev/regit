@@ -179,6 +179,7 @@ final class Index {
                 stages[i] = new Entry(modes[i], HEX.formatHex(bytes, at[0], at[0] + 20));
                 at[0] += 20;
             }
+            if (stages[0] == null && stages[1] == null && stages[2] == null) throw new IOException("Empty resolve-undo record");
             undo.put(path, stages);
         }
     }

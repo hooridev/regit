@@ -306,6 +306,14 @@ class InteropTest {
         assertTrue(Files.readString(root.resolve("x")).contains("<<<<<<<"));
         assertEquals("resolved\n", Files.readString(root.resolve("y")));
     }
+    @Test void damagedResolveUndoIsDroppedBeforeRecordingNewResolutions() throws Exception {
+        String conflicts = conflictedMerge();
+        appendExtension(root.resolve(".git/index"), "REUC", "z\0000\0000\0000\000".getBytes(UTF_8)); // no stages; Git rejects it as the last record
+        Files.writeString(root.resolve("x"), "resolved\n");
+        repo.stage("x");
+        assertEquals(conflicts.lines().filter(line -> line.endsWith("\tx")).toList(),
+                git(root, "ls-files", "--resolve-undo").lines().toList());
+    }
     @Test void resolveUndoIsKeptByStagingAndCommitAllButNotByCheckout() throws Exception {
         String conflicts = conflictedMerge();
         git(root, "add", "x", "y"); // Git itself records the resolution, as it would for a Git merge
