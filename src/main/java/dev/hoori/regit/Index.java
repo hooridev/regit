@@ -46,9 +46,8 @@ final class Index {
 
         /** Racily clean: modified no earlier than the index was written, so the stat alone cannot prove the content. */
         boolean racy(FileTime indexWritten) {
-            var t = indexWritten.toInstant();
-            int cmp = Long.compare(Integer.toUnsignedLong(mtimeSec), t.getEpochSecond());
-            return cmp > 0 || (cmp == 0 && mtimeNsec >= t.getNano());
+            // Whole seconds, as Git built without USE_NSEC compares; finer would trust stats Git treats as racy.
+            return Integer.toUnsignedLong(mtimeSec) >= indexWritten.toInstant().getEpochSecond();
         }
     }
 
