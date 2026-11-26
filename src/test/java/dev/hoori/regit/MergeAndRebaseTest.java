@@ -135,7 +135,7 @@ class MergeAndRebaseTest {
 
         // Cross-interop: native git starts conflicted merge -> regit aborts it cleanly!
         repo.checkoutResetBranch("main", m1);
-        var nativeMerge = new ProcessBuilder("git", "-C", root.toString(), "merge", "topic").redirectErrorStream(true).start();
+        var nativeMerge = new ProcessBuilder("git", "-C", root.toString(), "-c", "user.name=" + WHO.name(), "-c", "user.email=" + WHO.email(), "merge", "topic").redirectErrorStream(true).start();
         assertNotEquals(0, nativeMerge.waitFor());
         assertTrue(repo.isMergeInProgress());
         assertEquals(Set.of("one.txt", "two.txt"), repo.conflictedFiles());
