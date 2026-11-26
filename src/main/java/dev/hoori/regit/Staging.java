@@ -32,15 +32,15 @@ final class Staging {
                     throw new IOException("Ignored path: " + path);
             }
             for (String path : paths) {
-                var inspected = work.inspect(path, true);
+                var inspected = stage(work, path);
                 boolean hadConflict = conflicts.remove(path) != null;
                 if (inspected != null) {
-                    putEntry(entries, path, new Index.EntryRecord(path, inspected, 0, false));
+                    putEntry(entries, path, inspected);
                 } else if (entries.remove(path) == null && !hadConflict) {
                     throw new IOException("Unknown path: " + path);
                 }
             }
-            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
+            lock.publish(Index.encodeRecords(layout, db, mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -70,17 +70,17 @@ final class Staging {
                 if (Files.isDirectory(file, NOFOLLOW_LINKS)) {
                     stageAllUnlocked(work, entries, conflicts, ignore, List.of(target));
                 } else {
-                    var inspected = work.inspect(target, true);
+                    var inspected = stage(work, target);
                     boolean hadConflict = conflicts.remove(target) != null;
                     if (inspected != null) {
-                        putEntry(entries, target, new Index.EntryRecord(target, inspected, 0, false));
+                        putEntry(entries, target, inspected);
                     } else if (entries.remove(target) == null && !hadConflict) {
                         var removed = removeTrackedUnder(entries, target);
                         if (!removed) throw new IOException("Unknown path: " + target);
                     }
                 }
             }
-            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
+            lock.publish(Index.encodeRecords(layout, db, mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -93,7 +93,7 @@ final class Staging {
             var conflicts = extractConflicts(all);
             var ignore = new IgnoreRules(layout);
             stageAllUnlocked(work, entries, conflicts, ignore, filters);
-            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
+            lock.publish(Index.encodeRecords(layout, db, mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -106,7 +106,7 @@ final class Staging {
             var conflicts = extractConflicts(all);
             stageUpdatedUnlocked(work, entries, filters);
             resolveMatchingConflicts(work, entries, conflicts, filters);
-            lock.publish(Index.encodeRecords(mergeStage0AndConflicts(entries, conflicts)));
+            lock.publish(Index.encodeRecords(layout, db, mergeStage0AndConflicts(entries, conflicts)));
         }
     }
 
@@ -132,7 +132,7 @@ final class Staging {
                     var itaEntry = new Entry(inspected.mode(), emptyBlob);
                     putEntry(entries, path, new Index.EntryRecord(path, itaEntry, 0, true));
                 }
-                lock.publish(Index.encodeStage0(entries));
+                lock.publish(Index.encodeStage0(layout, db, entries));
             }
         }
     }
@@ -143,11 +143,11 @@ final class Staging {
         var existingPaths = new ArrayList<>(entries.keySet());
         for (String path : existingPaths) {
             if (!matchesFilter(path, filters)) continue;
-            var inspected = work.inspect(path, true);
+            var inspected = stage(work, path);
             if (inspected == null) {
                 entries.remove(path);
             } else {
-                entries.put(path, new Index.EntryRecord(path, inspected, 0, false));
+                entries.put(path, inspected);
             }
         }
     }
@@ -181,9 +181,9 @@ final class Staging {
                 if (!matchesFilter(rel, filters)) return FileVisitResult.CONTINUE;
                 if (entries.containsKey(rel) || conflicts.containsKey(rel)) return FileVisitResult.CONTINUE;
                 if (ignore.excludes(file, false)) return FileVisitResult.CONTINUE;
-                Entry inspected = work.inspect(rel, true);
+                var inspected = stage(work, rel);
                 if (inspected != null) {
-                    putEntry(entries, rel, new Index.EntryRecord(rel, inspected, 0, false));
+                    putEntry(entries, rel, inspected);
                 }
                 return FileVisitResult.CONTINUE;
             }
@@ -196,9 +196,16 @@ final class Staging {
         for (String path : new ArrayList<>(conflicts.keySet())) {
             if (!matchesFilter(path, filters)) continue;
             conflicts.remove(path);
-            Entry inspected = work.inspect(path, true);
-            if (inspected != null) putEntry(entries, path, new Index.EntryRecord(path, inspected, 0, false));
+            var inspected = stage(work, path);
+            if (inspected != null) putEntry(entries, path, inspected);
         }
+    }
+
+    /** Store a worktree file; its stat is taken before hashing, so the index write need not hash it again. */
+    private static Index.EntryRecord stage(WorkingTree work, String path) throws IOException {
+        Index.Stat stat = Index.Stat.of(work.resolve(path));
+        Entry entry = work.inspect(path, true);
+        return entry == null ? null : new Index.EntryRecord(path, entry, 0, false, stat);
     }
 
     private static TreeMap<String, Index.EntryRecord> extractStage0(List<Index.EntryRecord> all) {

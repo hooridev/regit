@@ -62,7 +62,7 @@ final class Merges {
 
             String mergeMsg = message != null ? message : ("Merge " + sourceLabel + "\n");
             if (outcome.hasConflicts()) {
-                writeConflictState(layout, work, oursMap, outcome, old, sourceId, mergeMsg);
+                writeConflictState(layout, db, work, oursMap, outcome, old, sourceId, mergeMsg);
                 return MergeResult.of(MergeResult.Status.CONFLICTED, Optional.empty(), outcome.conflicts().keySet());
             }
 
@@ -94,7 +94,7 @@ final class Merges {
             var tracked = new HashSet<String>(headFiles.keySet());
             for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
             work.forceReset(tracked, headFiles);
-            index.publish(Index.encode(headFiles));
+            index.publish(Index.encode(layout, db, headFiles));
             Files.deleteIfExists(mergeHead);
             Files.deleteIfExists(layout.admin().resolve("MERGE_MSG"));
             Files.deleteIfExists(layout.admin().resolve("MERGE_MODE"));
@@ -119,7 +119,7 @@ final class Merges {
         }
     }
 
-    private static void writeConflictState(Layout layout, WorkingTree work, Map<String, Entry> oursMap,
+    private static void writeConflictState(Layout layout, ObjectsDb db, WorkingTree work, Map<String, Entry> oursMap,
                                            ThreeWay.Outcome outcome, String oldHead, String mergeHead,
                                            String mergeMsg) throws IOException {
         try (var index = new Lock(layout.index())) {
@@ -145,7 +145,7 @@ final class Merges {
                         : (c.theirs() != null ? c.theirs().mode() : Entry.FILE);
                 work.writeRaw(e.getKey(), c.worktreeContent(), mode);
             }
-            index.publish(Index.encodeRecords(Index.combineWithConflicts(outcome.resolved(), outcome.conflicts())));
+            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts())));
             Files.writeString(layout.admin().resolve("ORIG_HEAD"), oldHead + "\n");
             Files.writeString(layout.admin().resolve("MERGE_HEAD"), mergeHead + "\n");
             Files.writeString(layout.admin().resolve("MERGE_MSG"), mergeMsg);
@@ -168,10 +168,9 @@ final class Merges {
         try (var index = new Lock(layout.index())) {
             var staged = Index.read(layout.index());
             if (!staged.equals(from)) throw new IOException("Index contains staged changes");
-            byte[] encoded = Index.encode(to);
             work.checkout(from, to, () -> {
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
-                index.publish(encoded);
+                index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
                 try { publish.run(); }
                 catch (IOException failure) {
                     try (var restore = new Lock(layout.index())) {

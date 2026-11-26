@@ -3,9 +3,11 @@ package dev.hoori.regit;
 import java.io.*;
 import java.nio.*;
 import java.nio.file.*;
+import java.nio.file.attribute.FileTime;
 import java.util.*;
 import static dev.hoori.regit.GitFiles.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
 
 /** Reads and writes Git index v2 and v3 (including {@code intent-to-add} and merge conflict stages 1..3). */
 final class Index {
@@ -15,13 +17,46 @@ final class Index {
     private static final int EXT_INTENT_TO_ADD = 0x2000;
     static final String EMPTY_BLOB_ID = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
-    record EntryRecord(String path, Entry entry, int stage, boolean intentToAdd) {}
+    /** {@code stat} is the cached lstat data Git compares to skip rehashing; null means unknown (written as zeros). */
+    record EntryRecord(String path, Entry entry, int stage, boolean intentToAdd, Stat stat) {
+        EntryRecord(String path, Entry entry, int stage, boolean intentToAdd) { this(path, entry, stage, intentToAdd, null); }
+    }
+
+    /** lstat fields in Git's index layout (32-bit, truncated like Git does). */
+    record Stat(int ctimeSec, int ctimeNsec, int mtimeSec, int mtimeNsec, int dev, int ino, int uid, int gid, int size) {
+        /** Stat of a regular file, or null when it is missing or not a regular file. */
+        static Stat of(Path file) throws IOException {
+            Map<String, Object> a;
+            try {
+                try { a = Files.readAttributes(file, "unix:*", NOFOLLOW_LINKS); }
+                catch (UnsupportedOperationException noUnix) { a = Files.readAttributes(file, "*", NOFOLLOW_LINKS); }
+            } catch (NoSuchFileException missing) { return null; }
+            if (!Boolean.TRUE.equals(a.get("isRegularFile"))) return null;
+            // Git for Windows stores the creation time as ctime.
+            var ctime = ((FileTime) a.getOrDefault("ctime", a.get("creationTime"))).toInstant();
+            var mtime = ((FileTime) a.get("lastModifiedTime")).toInstant();
+            return new Stat((int) ctime.getEpochSecond(), ctime.getNano(), (int) mtime.getEpochSecond(), mtime.getNano(),
+                    (int) number(a, "dev"), (int) number(a, "ino"), (int) number(a, "uid"), (int) number(a, "gid"),
+                    (int) number(a, "size"));
+        }
+
+        private static long number(Map<String, Object> attributes, String key) {
+            return attributes.get(key) instanceof Number n ? n.longValue() : 0;
+        }
+
+        /** Racily clean: modified no earlier than the index was written, so the stat alone cannot prove the content. */
+        boolean racy(FileTime indexWritten) {
+            // Whole seconds, as Git built without USE_NSEC compares; finer would trust stats Git treats as racy.
+            return Integer.toUnsignedLong(mtimeSec) >= indexWritten.toInstant().getEpochSecond();
+        }
+    }
 
     /** Read all index entries (stage 0..3 and intent-to-add flags). */
     static List<EntryRecord> readAll(Path file) throws IOException {
         var entries = new ArrayList<EntryRecord>();
         if (!Files.exists(file)) return entries;
         byte[] bytes = Files.readAllBytes(file);
+        FileTime written = Files.getLastModifiedTime(file);
         if (bytes.length < 32) throw new IOException("Truncated index");
         int end = bytes.length - 20;
         var sha = digest();
@@ -56,7 +91,11 @@ final class Index {
             if (nul == end || next > end) throw new IOException("Truncated index path");
             String name = Entry.name(bytes, pathOffset, nul - pathOffset);
             path(name);
-            entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd));
+            var stat = new Stat(buf.getInt(start), buf.getInt(start + 4), buf.getInt(start + 8), buf.getInt(start + 12),
+                    buf.getInt(start + 16), buf.getInt(start + 20), buf.getInt(start + 28), buf.getInt(start + 32),
+                    buf.getInt(start + 36));
+            // A racily clean stat must not survive into a newer index, where Git would trust it.
+            entries.add(new EntryRecord(name, Entry.regular(mode, hash), stage, intentToAdd, stat.racy(written) ? null : stat));
             buf.position(next);
         }
         while (buf.hasRemaining()) {
@@ -135,19 +174,47 @@ final class Index {
         return records;
     }
 
-    static byte[] encode(Map<String, Entry> files) throws IOException {
+    static byte[] encode(Layout layout, ObjectsDb db, Map<String, Entry> files) throws IOException {
         var list = new ArrayList<EntryRecord>(files.size());
         for (var e : files.entrySet()) {
             list.add(new EntryRecord(e.getKey(), e.getValue(), 0, false));
         }
-        return encodeRecords(list);
+        return encodeRecords(layout, db, list);
     }
 
-    static byte[] encodeStage0(Map<String, EntryRecord> files) throws IOException {
-        return encodeRecords(new ArrayList<>(files.values()));
+    static byte[] encodeStage0(Layout layout, ObjectsDb db, Map<String, EntryRecord> files) throws IOException {
+        return encodeRecords(layout, db, new ArrayList<>(files.values()));
     }
 
-    static byte[] encodeRecords(List<EntryRecord> records) throws IOException {
+    /** Encode with stat data valid for the current worktree, like {@code git update-index --refresh}, so Git need not rehash. */
+    static byte[] encodeRecords(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
+        return encodeRecords(withStats(layout, db, records));
+    }
+
+    private static List<EntryRecord> withStats(Layout layout, ObjectsDb db, List<EntryRecord> records) throws IOException {
+        if (layout.root() == null) return records;
+        Map<String, EntryRecord> previous = readStage0AllowConflicts(layout.index());
+        var work = new WorkingTree(layout.root(), db);
+        var result = new ArrayList<EntryRecord>(records.size());
+        for (EntryRecord rec : records) {
+            if (rec.stage() != 0 || rec.intentToAdd()) { result.add(rec); continue; }
+            EntryRecord prev = previous.get(rec.path());
+            Stat now;
+            try {
+                now = Stat.of(work.resolve(rec.path()));
+                // Stat is taken before hashing, so a later edit shows up as a stat mismatch.
+                if (now != null && !now.equals(rec.stat())
+                        && !(prev != null && prev.entry().equals(rec.entry()) && now.equals(prev.stat()))
+                        && !rec.entry().equals(work.inspect(rec.path(), false))) now = null;
+            } catch (IOException unreadable) {
+                now = null; // Zero stat only makes Git rehash this path.
+            }
+            result.add(new EntryRecord(rec.path(), rec.entry(), 0, false, now));
+        }
+        return result;
+    }
+
+    private static byte[] encodeRecords(List<EntryRecord> records) throws IOException {
         boolean needsV3 = false;
         for (EntryRecord rec : records) {
             if (rec.intentToAdd()) { needsV3 = true; break; }
@@ -169,9 +236,17 @@ final class Index {
             boolean extended = rec.intentToAdd();
             int flags = Math.min(path.length, 0xfff) | ((rec.stage() & 3) << FLAG_STAGE_SHIFT);
             if (extended) flags |= FLAG_EXTENDED;
-            out.write(new byte[24]);
+            Stat stat = rec.stat() == null ? new Stat(0, 0, 0, 0, 0, 0, 0, 0, 0) : rec.stat();
+            out.writeInt(stat.ctimeSec());
+            out.writeInt(stat.ctimeNsec());
+            out.writeInt(stat.mtimeSec());
+            out.writeInt(stat.mtimeNsec());
+            out.writeInt(stat.dev());
+            out.writeInt(stat.ino());
             out.writeInt(entry.mode());
-            out.write(new byte[12]);
+            out.writeInt(stat.uid());
+            out.writeInt(stat.gid());
+            out.writeInt(stat.size());
             out.write(HEX.parseHex(entry.hash()));
             out.writeShort(flags);
             if (extended) {
