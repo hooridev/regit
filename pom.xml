@@ -22,13 +22,13 @@
     </developer>
   </developers>
   <scm>
-    <connection>scm:git:https://github.com/TrautmannP/regit.git</connection>
-    <developerConnection>scm:git:ssh://git@github.com/TrautmannP/regit.git</developerConnection>
-    <url>https://github.com/TrautmannP/regit</url>
+    <connection>scm:git:https://github.com/hooridev/regit.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/hooridev/regit.git</developerConnection>
+    <url>https://github.com/hooridev/regit</url>
   </scm>
   <issueManagement>
     <system>GitHub</system>
-    <url>https://github.com/TrautmannP/regit/issues</url>
+    <url>https://github.com/hooridev/regit/issues</url>
   </issueManagement>
 
   <properties>
