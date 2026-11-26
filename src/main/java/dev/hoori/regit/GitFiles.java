@@ -50,7 +50,12 @@ final class GitFiles {
             Files.createDirectories(target.getParent());
             lock = Files.createFile(target.resolveSibling(target.getFileName() + ".lock"));
             // Whole second, so both nanosecond and whole-second Git builds see entries from this second as racy.
-            created = FileTime.from(Files.getLastModifiedTime(lock).toInstant().truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+            try {
+                created = FileTime.from(Files.getLastModifiedTime(lock).toInstant().truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+            } catch (IOException | RuntimeException failure) {
+                Files.deleteIfExists(lock); // the caller never gets a Lock to close
+                throw failure;
+            }
         }
         void publish(String text) throws IOException { publish(text.getBytes(UTF_8)); }
         void publish(byte[] bytes) throws IOException {
