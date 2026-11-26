@@ -73,8 +73,9 @@ final class Index {
         var entries = new ArrayList<EntryRecord>();
         var trees = new HashMap<String, String>();
         if (!Files.exists(file)) return new Parsed(entries, trees);
-        byte[] bytes = Files.readAllBytes(file);
+        // Time first: if the index is replaced meanwhile, an older time only marks more stats racy.
         FileTime written = Files.getLastModifiedTime(file);
+        byte[] bytes = Files.readAllBytes(file);
         if (bytes.length < 32) throw new IOException("Truncated index");
         int end = bytes.length - 20;
         var sha = digest();

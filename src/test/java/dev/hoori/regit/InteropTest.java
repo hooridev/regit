@@ -113,6 +113,15 @@ class InteropTest {
         assertTrue(tree.contains(git(root, "hash-object", "a/side")), tree);
         git(root, "fsck", "--strict", "--no-dangling");
     }
+    @Test void commitRebuildsCachedTreesThatAreMissing() throws Exception {
+        commit("a/x", "1", "one");
+        Files.writeString(root.resolve("a/x"), "2");
+        repo.stage("a/x");
+        String id = Index.cacheTree(root.resolve(".git/index")).get("a");
+        Files.delete(root.resolve(".git/objects/" + id.substring(0, 2) + "/" + id.substring(2))); // e.g. pruned
+        repo.commit("two\n", WHO, WHO);
+        git(root, "fsck", "--strict", "--no-dangling");
+    }
     @Test void indexOnlyModeChangeIsSeenDespiteMatchingStat() throws Exception {
         commit("f", "content", "one");
         Thread.sleep(1100); // so the stat Git writes next is not racy

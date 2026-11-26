@@ -76,7 +76,7 @@ final class Trees {
             dir.files.put(child.getKey() + "/", new Entry(Entry.TREE, write(child.getValue(), childPath, cache)));
         }
         String known = cache.get(path);
-        if (known != null) return known;
+        if (known != null && db.contains(known)) return known; // like Git: a cached tree must still exist
         var output = new ByteArrayOutputStream();
         for (var item : dir.files.entrySet()) {
             var entry = item.getValue();
