@@ -73,6 +73,23 @@ class InteropTest {
         assertEquals(" D both\nD  dir/new\n?? dir/new", git(linked, "status", "--porcelain", "-uall"));
         assertTrue(repo.status().unstaged().isEmpty());
     }
+    @Test void indexCarriesStatDataSoGitNeedNotRehash() throws Exception {
+        commit("a", "a", "one");
+        commit("dir/b", "b", "two");
+        repo.createBranch("topic");
+        commit("a", "changed", "three");
+        git(root, "status"); // Git refreshes the index; regit must keep that stat data
+        repo.switchBranch("topic");
+        var linked = repo.addWorktree(tmp.resolve("linked"), "main");
+        for (Path dir : List.of(root, tmp.resolve("linked"))) {
+            String debug = git(dir, "ls-files", "--debug");
+            assertFalse(debug.contains("mtime: 0:0"), debug);
+            assertEquals("", git(dir, "diff-files", "--name-only"));
+        }
+        Files.writeString(tmp.resolve("linked/a"), "edited");
+        assertEquals("a", git(tmp.resolve("linked"), "diff-files", "--name-only"));
+        assertEquals(Map.of("a", Status.Change.MODIFIED), linked.status().unstaged());
+    }
     @Test void canonicalCommitIndexAndDeletion() throws Exception {
         for (String path : List.of("a.c", "a/nested", "ö")) {
             Files.createDirectories(root.resolve(path).getParent());

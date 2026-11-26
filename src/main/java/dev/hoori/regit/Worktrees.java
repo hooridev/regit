@@ -122,11 +122,12 @@ final class Worktrees {
             Files.writeString(admin.resolve("commondir"), "../..\n");
             Files.writeString(admin.resolve("gitdir"), dest.resolve(".git") + "\n");
             Files.writeString(child.head(), detached ? (commitTip + "\n") : ("ref: refs/heads/" + branchName + "\n"));
-            Files.write(child.index(), Index.encode(files));
             Path gitfile = dest.resolve(".git");
             String pointer = "gitdir: " + admin + "\n";
-            new WorkingTree(dest, db).checkout(Map.of(), files,
-                    () -> Files.writeString(gitfile, pointer, StandardOpenOption.CREATE_NEW));
+            new WorkingTree(dest, db).checkout(Map.of(), files, () -> {
+                Files.write(child.index(), Index.encode(child, db, files)); // after checkout, so stat data matches
+                Files.writeString(gitfile, pointer, StandardOpenOption.CREATE_NEW);
+            });
             return child;
         } catch (IOException e) {
             if (admin != null) {

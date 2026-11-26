@@ -584,7 +584,7 @@ public final class Repository {
                 var stage0 = new TreeMap<>(Index.readStage0(layout.index()));
                 if (options.isAll()) {
                     new Staging(layout, db).stageUpdatedUnlocked(work, stage0, List.of());
-                    index.publish(Index.encodeStage0(stage0));
+                    index.publish(Index.encodeStage0(layout, db, stage0));
                 }
                 // Build tree from non-intent-to-add stage-0 entries
                 var committedFiles = new HashMap<String, Entry>(stage0.size());
@@ -1011,7 +1011,7 @@ public final class Repository {
                     work.materializeEntry(path, entry);
                     entries.put(path, new Index.EntryRecord(path, entry, 0, false));
                 }
-                lock.publish(Index.encodeStage0(entries));
+                lock.publish(Index.encodeStage0(layout, db, entries));
             }
             return null;
         });
@@ -1087,11 +1087,10 @@ public final class Repository {
             var staged = Index.read(layout.index());
             if (!staged.equals(from)) throw new IOException("Index contains staged changes");
             var to = snapshot(tip);
-            byte[] encoded = Index.encode(to);
             work.checkout(from, to, () -> {
                 // Keep the original bytes (including optional extensions) for a failed ref publication.
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
-                index.publish(encoded);
+                index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
                 try { publish.run(); }
                 catch (IOException failure) {
                     try (var restore = new Lock(layout.index())) {

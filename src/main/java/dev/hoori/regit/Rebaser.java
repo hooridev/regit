@@ -135,7 +135,7 @@ final class Rebaser {
             var tracked = new HashSet<String>(origFiles.keySet());
             for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
             work.forceReset(tracked, origFiles);
-            index.publish(Index.encode(origFiles));
+            index.publish(Index.encode(layout, db, origFiles));
             if (headName.startsWith("refs/heads/")) {
                 String branch = headName.substring(11);
                 try (var ref = new Lock(layout.ref(branch))) {
@@ -225,7 +225,7 @@ final class Rebaser {
                     var tracked = new HashSet<String>(currentTree.keySet());
                     for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
                     work.forceReset(tracked, currentTree);
-                    index.publish(Index.encode(currentTree));
+                    index.publish(Index.encode(layout, db, currentTree));
                     if (ref != null) {
                         ref.publish(finalTip + "\n");
                         head.publish("ref: " + headName + "\n");
@@ -263,7 +263,7 @@ final class Rebaser {
                         : (c.theirs() != null ? c.theirs().mode() : Entry.FILE);
                 work.writeRaw(e.getKey(), c.worktreeContent(), mode);
             }
-            index.publish(Index.encodeRecords(Index.combineWithConflicts(outcome.resolved(), outcome.conflicts())));
+            index.publish(Index.encodeRecords(layout, db, Index.combineWithConflicts(outcome.resolved(), outcome.conflicts())));
             head.publish(currentTip + "\n");
 
             Path stateDir = layout.admin().resolve(STATE_DIR);
@@ -451,10 +451,9 @@ final class Rebaser {
             var staged = Index.read(layout.index());
             if (!staged.equals(from)) throw new IOException("Index contains staged changes");
             var to = snapshot(db, trees, newTip);
-            byte[] encoded = Index.encode(to);
             work.checkout(from, to, () -> {
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
-                index.publish(encoded);
+                index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
                 try { publish.run(); }
                 catch (IOException failure) {
                     try (var restore = new Lock(layout.index())) {
