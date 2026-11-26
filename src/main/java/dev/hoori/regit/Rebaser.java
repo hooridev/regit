@@ -435,13 +435,10 @@ final class Rebaser {
     }
 
     private static void ensureCleanWorktree(Layout layout, WorkingTree work, Map<String, Entry> headFiles) throws IOException {
-        Map<String, Entry> staged = Index.read(layout.index());
-        if (!staged.equals(headFiles)) throw new IOException("Index contains staged changes");
         var records = Index.readStage0(layout.index());
+        if (!Index.matches(records, headFiles)) throw new IOException("Index contains staged changes");
         for (var e : headFiles.entrySet()) {
-            if (!e.getValue().equals(work.inspect(e.getKey(), records.get(e.getKey())))) {
-                throw new IOException("Local changes at " + e.getKey());
-            }
+            work.requireClean(e.getKey(), e.getValue(), records.get(e.getKey()));
         }
     }
 
@@ -449,10 +446,10 @@ final class Rebaser {
                                       String oldTip, String newTip, WorkingTree.Publish publish) throws IOException {
         var from = snapshot(db, trees, oldTip);
         try (var index = new Lock(layout.index())) {
-            var staged = Index.read(layout.index());
-            if (!staged.equals(from)) throw new IOException("Index contains staged changes");
+            var staged = Index.readStage0(layout.index());
+            if (!Index.matches(staged, from)) throw new IOException("Index contains staged changes");
             var to = snapshot(db, trees, newTip);
-            work.checkout(from, to, () -> {
+            work.checkout(from, to, staged, () -> {
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
                 index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
                 try { publish.run(); }

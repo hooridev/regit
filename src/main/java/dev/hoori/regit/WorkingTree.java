@@ -30,14 +30,22 @@ final class WorkingTree {
 
     /** Like {@code inspect(name, false)}, but trusts {@code known} without hashing while the file keeps its stat, as Git does. */
     Entry inspect(String name, Index.EntryRecord known) throws IOException {
-        if (known != null && known.unchanged(Index.Stat.of(resolve(name)))) return known.entry();
+        if (known != null && known.stat() != null && known.unchanged(Index.Stat.of(resolve(name)))) return known.entry();
         return inspect(name, false);
+    }
+
+    void requireClean(String name, Entry expected, Index.EntryRecord known) throws IOException {
+        // Basic attributes expose creation time in place of Unix ctime. Same-size edits can preserve mtime.
+        Entry actual = root.getFileSystem().supportedFileAttributeViews().contains("unix")
+                ? inspect(name, known) : inspect(name, false);
+        if (!expected.equals(actual)) throw new IOException("Local changes at " + name);
     }
 
     @FunctionalInterface interface Publish { void run() throws IOException; }
 
     /** Preflight the entire delta, then journal each successful replacement for rollback. */
-    void checkout(Map<String, Entry> from, Map<String, Entry> to, Publish publish) throws IOException {
+    void checkout(Map<String, Entry> from, Map<String, Entry> to,
+                  Map<String, Index.EntryRecord> staged, Publish publish) throws IOException {
         var changed = new TreeSet<>(from.keySet());
         changed.addAll(to.keySet());
         changed.removeIf(name -> Objects.equals(from.get(name), to.get(name)));
@@ -47,7 +55,7 @@ final class WorkingTree {
             Path file = resolve(name);
             Entry old = from.get(name);
             if (old != null) {
-                if (!old.equals(inspect(name, false))) throw new IOException("Local changes at " + name);
+                requireClean(name, old, staged.get(name));
                 if (!to.containsKey(name))
                     for (Path p = file.getParent(); !p.equals(root); p = p.getParent()) directories.add(p);
             } else if (Files.isDirectory(file, NOFOLLOW_LINKS)) {

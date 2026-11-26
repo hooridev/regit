@@ -1087,10 +1087,10 @@ public final class Repository {
         var work = working();
         var from = snapshot(old);
         try (var index = new Lock(layout.index())) {
-            var staged = Index.read(layout.index());
-            if (!staged.equals(from)) throw new IOException("Index contains staged changes");
+            var staged = Index.readStage0(layout.index());
+            if (!Index.matches(staged, from)) throw new IOException("Index contains staged changes");
             var to = snapshot(tip);
-            work.checkout(from, to, () -> {
+            work.checkout(from, to, staged, () -> {
                 // Keep the original bytes (including optional extensions) for a failed ref publication.
                 byte[] backup = Files.exists(layout.index()) ? Files.readAllBytes(layout.index()) : null;
                 index.publish(Index.encode(layout, db, to)); // after checkout, so stat data matches the new files
