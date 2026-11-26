@@ -93,10 +93,10 @@ class InteropTest {
     @Test void indexIsDatedToItsLockSoGitRechecksFilesStatedUnderIt() throws Exception {
         Path index = tmp.resolve("index");
         try (var lock = new GitFiles.Lock(index)) {
-            var locked = Files.getLastModifiedTime(tmp.resolve("index.lock"));
+            var locked = Files.getLastModifiedTime(tmp.resolve("index.lock")).toInstant().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
             Thread.sleep(1100); // cross a second boundary, as a slow stage or checkout would
             lock.publish(new byte[0]);
-            assertEquals(locked, Files.getLastModifiedTime(index));
+            assertEquals(locked, Files.getLastModifiedTime(index).toInstant());
         }
     }
     @Test void canonicalCommitIndexAndDeletion() throws Exception {
