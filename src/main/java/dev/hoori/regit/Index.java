@@ -23,6 +23,7 @@ final class Index {
     private static final int EXT_TREE = 0x54524545; // "TREE", Git's cache-tree extension
     private static final int EXT_RESOLVE_UNDO = 0x52455543; // "REUC": the stages of conflicts resolved since
     private static final int EXT_UNTRACKED = 0x554e5452; // "UNTR", Git's untracked cache
+    private static final int EXT_FSMONITOR = 0x46534d4e; // "FSMN"
     static final String EMPTY_BLOB_ID = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 
     /** {@code stat} is the cached lstat data Git compares to skip rehashing; null means unknown (written as zeros). */
@@ -85,6 +86,7 @@ final class Index {
         var trees = new HashMap<String, String>();
         var undo = new TreeMap<String, Entry[]>(Entry.BYTE_ORDER);
         byte[] untracked = null;
+        boolean fsmonitor = false;
         if (!Files.exists(file)) return new Parsed(entries, trees, undo, null, 0);
         // Time first: if the index is replaced meanwhile, an older time only marks more stats racy.
         FileTime written = Files.getLastModifiedTime(file);
@@ -154,9 +156,13 @@ final class Index {
                 }
             } else if (signature == EXT_UNTRACKED) {
                 untracked = Arrays.copyOfRange(bytes, buf.position(), buf.position() + size);
+            } else if (signature == EXT_FSMONITOR) {
+                fsmonitor = true;
             }
             buf.position(buf.position() + size);
         }
+        // FSMN is dropped, and Git then trusts an untracked cache kept from it against a fresh fsmonitor token.
+        if (fsmonitor) untracked = null;
         return new Parsed(entries, trees, undo, untracked, written.toInstant().getEpochSecond());
     }
 
@@ -278,11 +284,17 @@ final class Index {
     /** {@code written} holds the stats of files just written, taken right after writing them; others are rechecked. */
     static byte[] encode(Layout layout, ObjectsDb db, Map<String, Entry> files, Map<String, Stat> written)
             throws IOException {
+        return encode(layout, db, files, written, false);
+    }
+
+    /** {@code keepResolveUndo}: see {@link #encodeWithTrees(Layout, ObjectsDb, List, boolean)}. */
+    static byte[] encode(Layout layout, ObjectsDb db, Map<String, Entry> files, Map<String, Stat> written,
+                         boolean keepResolveUndo) throws IOException {
         var list = new ArrayList<EntryRecord>(files.size());
         for (var e : files.entrySet()) {
             list.add(new EntryRecord(e.getKey(), e.getValue(), 0, false, written.get(e.getKey())));
         }
-        return encodeWithTrees(layout, db, list, false).bytes();
+        return encodeWithTrees(layout, db, list, keepResolveUndo).bytes();
     }
 
     static byte[] encodeStage0(Layout layout, ObjectsDb db, Map<String, EntryRecord> files) throws IOException {

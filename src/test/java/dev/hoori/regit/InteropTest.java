@@ -247,6 +247,22 @@ class InteropTest {
         repo.stage("b/y");
         assertEquals(3, scan().directories());
     }
+    @Test void racyUntrackedDirectoryIsRescannedWithItsParent() throws Exception {
+        commit("f", "1", "one");
+        Files.createDirectories(root.resolve("u"));
+        Files.writeString(root.resolve("u/a"), "a");
+        Thread.sleep(1100);
+        Files.writeString(root.resolve("u/b"), "b"); // u/ is now newer than the root directory
+        git(root, "config", "core.untrackedCache", "true");
+        git(root, "update-index", "--untracked-cache");
+        git(root, "status"); // caches u/ as a check-only directory listed as "u/" in the root
+        long u = Files.getLastModifiedTime(root.resolve("u")).toMillis() / 1000 * 1000;
+        // Dated in u/'s second: u/ is racy, the root is not.
+        Files.setLastModifiedTime(root.resolve(".git/index"), java.nio.file.attribute.FileTime.fromMillis(u));
+        Files.writeString(root.resolve("f"), "2");
+        repo.stage("f");
+        assertEquals("M  f\n?? u/", scan().status());
+    }
     @Test void untrackedCacheOfManyDirectoriesIsReadAndWrittenBack() throws Exception {
         String[] paths = new String[130]; // more than two bitmap words, as a run of valid directories
         Arrays.setAll(paths, i -> "dir" + i + "/f");
@@ -299,6 +315,26 @@ class InteropTest {
         repo.switchBranch("topic"); // like git checkout, which starts from the new tree
         assertEquals("", git(root, "ls-files", "--resolve-undo"));
         git(root, "status");
+    }
+    @Test void rebaseFinishedRightAfterAConflictKeepsItsResolveUndo() throws Exception {
+        commit("x", "base\n", "base");
+        repo.createBranch("topic");
+        commit("x", "main\n", "main");
+        repo.switchBranch("topic");
+        commit("x", "topic\n", "topic");
+        repo.rebase("main", WHO, RebaseOptions.defaults().allowConflicts());
+        String conflict = git(root, "ls-files", "-u");
+        Files.writeString(root.resolve("x"), "resolved\n");
+        repo.stage("x");
+        repo.continueRebase(WHO); // nothing left to pick, so Git would keep the index and its resolve-undo
+        assertEquals(conflict, git(root, "ls-files", "--resolve-undo"));
+    }
+    @Test void untrackedCacheIsDroppedWithTheFsmonitorDataItRelies() throws Exception {
+        warmUntrackedCache("a/x");
+        Path index = root.resolve(".git/index");
+        appendExtension(index, "FSMN", new byte[] {0, 0, 0, 2, '1', 0, 0, 0, 0, 0});
+        repo.stage("a/x.untracked");
+        assertFalse(new String(Files.readAllBytes(index), java.nio.charset.StandardCharsets.ISO_8859_1).contains("UNTR"));
     }
     @Test void otherOptionalIndexExtensionsAreDroppedAndMandatoryOnesRejected() throws Exception {
         commit("f", "1", "one");

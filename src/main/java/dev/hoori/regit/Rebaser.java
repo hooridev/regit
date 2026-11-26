@@ -158,6 +158,7 @@ final class Rebaser {
         Map<String, Entry> currentTree = snapshot(db, trees, currentTip);
         var done = new ArrayList<>(priorDone);
         int stepNum = doneCount;
+        boolean replayed = false; // Git writes the index per pick, which drops the resolve-undo data
 
         for (int i = 0; i < steps.size(); i++) {
             RebaseStep step = steps.get(i);
@@ -166,6 +167,7 @@ final class Rebaser {
                 done.add(formatTodoLine(step));
                 continue;
             }
+            replayed = true;
             Revision rev = history.read(step.commit().id());
             if (rev.parents().size() > 1) throw new IOException("Rebase requires a linear topic history");
             Map<String, Entry> parentTree = rev.parents().isEmpty()
@@ -225,7 +227,7 @@ final class Rebaser {
                     var tracked = new HashSet<String>(currentTree.keySet());
                     for (Index.EntryRecord rec : Index.readAll(layout.index())) tracked.add(rec.path());
                     var written = work.forceReset(tracked, currentTree);
-                    index.publish(Index.encode(layout, db, currentTree, written));
+                    index.publish(Index.encode(layout, db, currentTree, written, !replayed));
                     if (ref != null) {
                         ref.publish(finalTip + "\n");
                         head.publish("ref: " + headName + "\n");

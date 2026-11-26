@@ -38,14 +38,19 @@ final class UntrackedCache {
      */
     static byte[] forget(byte[] data, Set<String> dirs, long indexSeconds) {
         try {
+            data = data.clone();
             var in = ByteBuffer.wrap(data);
-            int identity = (int) varint(in);
+            int identity = Math.toIntExact(varint(in));
             // Identity of the worktree, then the stats of info/exclude and core.excludesFile, the dir flags and their ids.
-            in.position(in.position() + identity + 2 * STAT + 4 + 2 * ID);
+            int excludes = in.position() + identity;
+            // A racy exclude-file stat would be trusted against the newer index; zeroed, Git rehashes that file.
+            for (int at = excludes; at < excludes + 2 * STAT; at += STAT)
+                if (racy(ByteBuffer.wrap(data, at, STAT).slice(), indexSeconds)) Arrays.fill(data, at, at + STAT, (byte) 0);
+            in.position(excludes + 2 * STAT + 4 + 2 * ID);
             while (in.get() != 0) { /* exclude_per_dir */ }
             int header = in.position();
-            int count = (int) varint(in);
-            if (count == 0) return data;
+            int count = Math.toIntExact(varint(in));
+            if (count == 0) return in.hasRemaining() ? null : data;
             var all = new ArrayList<Dir>(Math.min(count, in.remaining()));
             read(in, "", count, all);
             if (all.size() != count) return null;
@@ -61,15 +66,20 @@ final class UntrackedCache {
             for (int i = 0; i < count; i++) if (hasId.get(i)) all.get(i).id = take(in, ID);
             if (in.remaining() != 1 || in.get() != 0) return null;
 
+            // A directory rescanned under a cached parent would be listed twice, so its parents go too, as in Git.
+            var forget = new HashSet<String>();
+            for (Dir dir : all) {
+                if (!dirs.contains(dir.path) && !(dir.valid && racy(ByteBuffer.wrap(dir.stat), indexSeconds))) continue;
+                forget.add("");
+                for (int slash = dir.path.indexOf('/'); slash >= 0; slash = dir.path.indexOf('/', slash + 1))
+                    forget.add(dir.path.substring(0, slash));
+                forget.add(dir.path);
+            }
             var out = new ByteArrayOutputStream(data.length);
             out.write(data, 0, header);
             varint(out, count);
             for (Dir dir : all) {
-                var stat = dir.stat == null ? null : ByteBuffer.wrap(dir.stat);
-                // Whole seconds, as Git built without USE_NSEC compares; the ctime too, like Index.Stat.racy.
-                if (dir.valid && (dirs.contains(dir.path)
-                        || Integer.toUnsignedLong(stat.getInt(0)) >= indexSeconds
-                        || Integer.toUnsignedLong(stat.getInt(8)) >= indexSeconds)) {
+                if (dir.valid && forget.contains(dir.path)) {
                     dir.valid = dir.checkOnly = false;
                     dir.untracked.clear();
                     dir.stat = null;
@@ -101,6 +111,11 @@ final class UntrackedCache {
         } catch (RuntimeException damaged) {
             return null;
         }
+    }
+
+    /** Whole seconds, as Git built without USE_NSEC compares; the ctime too, like Index.Stat.racy. */
+    private static boolean racy(ByteBuffer stat, long indexSeconds) {
+        return Integer.toUnsignedLong(stat.getInt(0)) >= indexSeconds || Integer.toUnsignedLong(stat.getInt(8)) >= indexSeconds;
     }
 
     private static void read(ByteBuffer in, String parent, int total, List<Dir> all) {
