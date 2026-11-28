@@ -216,4 +216,189 @@ class BranchCheckoutWorktreeTest {
         assertEquals(1, repo.worktreeList().size());
         git(root, "fsck", "--strict");
     }
+
+    private static void deleteTree(Path dir) throws IOException {
+        try (var paths = Files.walk(dir)) {
+            for (var path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);
+        }
+    }
+
+    private static WorktreeInfo findWorktree(Repository repo, Path path) throws IOException {
+        Path real = Files.exists(path) ? path.toRealPath() : path.getParent().toRealPath().resolve(path.getFileName());
+        return repo.worktreeList().stream().filter(w -> w.path().equals(real)).findFirst().orElseThrow();
+    }
+
+    @Test void worktreeLockUnlockAndPruneMatchGit() throws Exception {
+        Path root = tmp.resolve("wt-maint");
+        Repository repo = Repository.init(root, "main");
+        writeFile(root, "file.txt", "v1\n");
+        repo.stage("file.txt");
+        repo.commit("c1\n", WHO, WHO);
+
+        // Missing worktrees/ directory returns empty list
+        assertEquals(List.of(), repo.pruneWorktrees());
+
+        // Main worktree and unknown paths cannot be locked or unlocked
+        assertThrows(IOException.class, () -> repo.lockWorktree(root));
+        assertThrows(IOException.class, () -> repo.lockWorktree(root, "nope"));
+        assertThrows(IOException.class, () -> repo.unlockWorktree(root));
+        assertThrows(IOException.class, () -> repo.lockWorktree(tmp.resolve("nonexistent")));
+        assertThrows(IOException.class, () -> repo.unlockWorktree(tmp.resolve("nonexistent")));
+
+        Path wtPlainPath = tmp.resolve("wt-plain");
+        Repository wtPlain = repo.addWorktreeNewBranch(wtPlainPath, "feat/plain");
+        Path wtReasonPath = tmp.resolve("wt-reason");
+        repo.addWorktreeNewBranch(wtReasonPath, "feat/reason");
+        Path wtLivePath = tmp.resolve("wt-live");
+        repo.addWorktreeNewBranch(wtLivePath, "feat/live");
+
+        // Unlocking an unlocked worktree fails
+        assertThrows(IOException.class, () -> repo.unlockWorktree(wtPlainPath));
+
+        // Lock without reason: porcelain shows bare "locked", double lock fails, removal fails
+        repo.lockWorktree(wtPlainPath);
+        assertThrows(IOException.class, () -> repo.lockWorktree(wtPlainPath));
+        assertThrows(IOException.class, () -> repo.lockWorktree(wtPlainPath, "again"));
+        WorktreeInfo plainInfo = findWorktree(repo, wtPlainPath);
+        assertTrue(plainInfo.locked());
+        assertEquals(Optional.empty(), plainInfo.lockReason());
+        String porcelain = git(root, "worktree", "list", "--porcelain");
+        String plainStanza = Arrays.stream(porcelain.split("\n\n"))
+                .filter(s -> s.startsWith("worktree " + plainInfo.path() + "\n"))
+                .findFirst().orElseThrow();
+        assertTrue(Arrays.asList(plainStanza.split("\n")).contains("locked"), plainStanza);
+
+        assertThrows(IOException.class, () -> repo.removeWorktree(wtPlain));
+        assertThrows(IOException.class, () -> repo.removeWorktree(wtPlainPath));
+        assertThrows(IOException.class, () -> repo.removeWorktreeForce(wtPlain));
+        assertThrows(IOException.class, () -> repo.removeWorktreeForce(wtPlainPath));
+
+        // Lock with reason: porcelain shows "locked <reason>"
+        repo.lockWorktree(wtReasonPath, "on removable drive");
+        WorktreeInfo reasonInfo = findWorktree(repo, wtReasonPath);
+        assertTrue(reasonInfo.locked());
+        assertEquals(Optional.of("on removable drive"), reasonInfo.lockReason());
+        String porcelainReason = git(root, "worktree", "list", "--porcelain");
+        assertTrue(porcelainReason.contains("locked on removable drive"), porcelainReason);
+
+        // Unlock via regit: git sees it unlocked
+        repo.unlockWorktree(wtPlainPath);
+        assertFalse(findWorktree(repo, wtPlainPath).locked());
+        String afterUnlock = git(root, "worktree", "list", "--porcelain");
+        assertFalse(afterUnlock.contains("\nlocked\n") || afterUnlock.endsWith("\nlocked"), afterUnlock);
+
+        // Native git lock --reason is visible to regit and unlockable by regit
+        git(root, "worktree", "lock", "--reason", "x", wtPlainPath.toString());
+        WorktreeInfo gitLocked = findWorktree(repo, wtPlainPath);
+        assertTrue(gitLocked.locked());
+        assertEquals(Optional.of("x"), gitLocked.lockReason());
+        repo.unlockWorktree(wtPlainPath);
+        assertFalse(findWorktree(repo, wtPlainPath).locked());
+        assertFalse(git(root, "worktree", "list", "--porcelain").contains("locked x"));
+
+        // Delete both an unlocked and a locked worktree directory externally
+        Path wtPlainReal = wtPlainPath.toRealPath();
+        Path wtReasonReal = wtReasonPath.toRealPath();
+        Path wtLiveReal = wtLivePath.toRealPath();
+        deleteTree(wtPlainPath);
+        deleteTree(wtReasonPath);
+
+        // Unlocked missing entry is prunable; locked missing entry is not prunable
+        assertTrue(findWorktree(repo, wtPlainPath).prunable());
+        assertFalse(findWorktree(repo, wtReasonPath).prunable());
+        assertTrue(findWorktree(repo, wtReasonPath).locked());
+
+        // Also add a corrupt entry without a gitdir file to verify it is pruned silently
+        Path corruptAdmin = root.resolve(".git/worktrees/corrupt-entry");
+        Files.createDirectories(corruptAdmin);
+
+        // Prune removes unlocked missing entry & corrupt entry, skips locked missing entry, keeps live worktree
+        List<Path> pruned = repo.pruneWorktrees();
+        assertEquals(List.of(wtPlainReal), pruned);
+        assertFalse(Files.exists(corruptAdmin));
+        assertEquals(List.of(root.toRealPath(), wtLiveReal, wtReasonReal).stream().sorted().toList(),
+                repo.worktreeList().stream().map(WorktreeInfo::path).sorted().toList());
+
+        // Native git agrees and the pruned branch can be checked out again
+        String afterPrune = git(root, "worktree", "list", "--porcelain");
+        assertFalse(afterPrune.contains("worktree " + wtPlainReal), afterPrune);
+        assertTrue(afterPrune.contains("worktree " + wtLiveReal), afterPrune);
+        assertTrue(afterPrune.contains("worktree " + wtReasonReal), afterPrune);
+        assertTrue(afterPrune.contains("locked on removable drive"), afterPrune);
+
+        repo.switchBranch("feat/plain");
+        assertEquals("feat/plain", repo.branch());
+        repo.switchBranch("main");
+
+        // Unlocking the missing locked worktree allows subsequent prune to remove it
+        repo.unlockWorktree(wtReasonPath);
+        assertEquals(List.of(wtReasonReal), repo.pruneWorktrees());
+        assertEquals(2, repo.worktreeList().size());
+        assertFalse(git(root, "worktree", "list", "--porcelain").contains("worktree " + wtReasonReal));
+        git(root, "fsck", "--strict");
+    }
+
+    @Test void worktreeLockTargetsTheLiveRegistrationOfAReusedPath() throws Exception {
+        Path root = tmp.resolve("wt-reuse");
+        Repository repo = Repository.init(root, "main");
+        writeFile(root, "file.txt", "v1\n");
+        repo.stage("file.txt");
+        repo.commit("c1\n", WHO, WHO);
+
+        // The first checkout disappears without prune, then the path is used again
+        Path wt = tmp.resolve("wt-reused");
+        repo.addWorktreeNewBranch(wt, "feat/old");
+        deleteTree(wt);
+        repo.addWorktreeNewBranch(wt, "feat/new");
+
+        repo.lockWorktree(wt, "pinned");
+        String porcelain = git(root, "worktree", "list", "--porcelain");
+        String live = Arrays.stream(porcelain.split("\n\n")).filter(s -> s.contains("branch refs/heads/feat/new"))
+                .findFirst().orElseThrow();
+        assertTrue(live.contains("locked pinned"), porcelain);
+        assertThrows(IOException.class, () -> repo.removeWorktreeForce(wt));
+
+        // A copy of the checkout's .git file elsewhere does not make that path the worktree
+        Path copy = tmp.resolve("wt-copy");
+        Files.createDirectories(copy);
+        Files.copy(wt.resolve(".git"), copy.resolve(".git"));
+        assertThrows(IOException.class, () -> repo.unlockWorktree(copy));
+
+        // A gitdir file that cannot be read (here: not UTF-8) is no reason to prune
+        Path unreadable = root.resolve(".git/worktrees/unreadable");
+        Files.createDirectories(unreadable);
+        Files.write(unreadable.resolve("gitdir"), new byte[]{(byte) 0xff, (byte) 0xfe, '\n'});
+
+        // Prune takes only the stale registration; the locked live checkout stays
+        assertEquals(List.of(wt.toRealPath()), repo.pruneWorktrees());
+        assertTrue(Files.isRegularFile(wt.resolve(".git")));
+        assertTrue(Files.isDirectory(unreadable));
+        assertEquals(2, repo.worktreeList().size()); // the unreadable entry is skipped, the others still list
+        // ...and does not block locking an offline worktree found by scanning the registry
+        Path offline = tmp.resolve("wt-offline");
+        repo.addWorktreeNewBranch(offline, "feat/offline");
+        Path offlineReal = offline.toRealPath();
+        deleteTree(offline);
+        repo.lockWorktree(offline, "on a usb drive");
+        repo.unlockWorktree(offline);
+        deleteTree(unreadable);
+        assertEquals(List.of(offlineReal), repo.pruneWorktrees());
+        repo.unlockWorktree(wt);
+
+        // A dangling .git pointer (repository moved) is for repair, not prune
+        String pointer = Files.readString(wt.resolve(".git"));
+        Files.writeString(wt.resolve(".git"), "gitdir: " + tmp.resolve("moved/.git/worktrees/x") + "\n");
+        assertEquals(List.of(), repo.pruneWorktrees());
+        // So is a pointer copied from another live worktree
+        Path other = tmp.resolve("wt-other");
+        repo.addWorktreeNewBranch(other, "feat/other");
+        Files.copy(other.resolve(".git"), wt.resolve(".git"), StandardCopyOption.REPLACE_EXISTING);
+        assertEquals(List.of(), repo.pruneWorktrees());
+        Files.writeString(wt.resolve(".git"), pointer);
+        repo.removeWorktree(other);
+
+        repo.removeWorktree(wt);
+        assertEquals(1, repo.worktreeList().size());
+        git(root, "fsck", "--strict");
+    }
 }
