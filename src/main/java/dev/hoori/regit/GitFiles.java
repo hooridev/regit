@@ -30,16 +30,16 @@ final class GitFiles {
         }
     }
     static String branch(String name) throws IOException {
-        if (name.equals("HEAD")) throw new IOException("Invalid branch: " + name);
+        if (name.equals("HEAD") || name.startsWith("-")) throw new IOException("Invalid branch: " + name);
         return shortRef(name, "branch");
     }
 
-    /** Tag names follow the branch rules, except that git allows a tag named {@code HEAD}. */
+    /** Existing tag names: the branch rules without the branch-only ones (git reads {@code HEAD} and {@code -x} tags). */
     static String tag(String name) throws IOException { return shortRef(name, "tag"); }
 
     private static String shortRef(String name, String kind) throws IOException {
         path(name);
-        if (name.startsWith("-") || name.endsWith(".") || name.contains("..")
+        if (name.endsWith(".") || name.contains("..")
                 || name.contains("@{") || name.chars().anyMatch(c -> c <= 32 || c == 127 || "~^:?*[".indexOf(c) >= 0))
             throw new IOException("Invalid " + kind + ": " + name);
         for (String part : name.split("/"))

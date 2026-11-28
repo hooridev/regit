@@ -55,6 +55,7 @@ final class Tags {
 
     static void checkNew(Layout layout, String name) throws IOException {
         tag(Objects.requireNonNull(name, "name"));
+        if (name.startsWith("-")) throw new IOException("Invalid tag: " + name); // as git tag refuses it
         for (String other : names(layout)) {
             if (other.equals(name)) throw new IOException("Tag already exists: " + name);
             if (other.startsWith(name + "/") || name.startsWith(other + "/"))

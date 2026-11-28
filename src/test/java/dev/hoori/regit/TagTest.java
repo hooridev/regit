@@ -209,20 +209,22 @@ class TagTest {
         // git allows a tag named HEAD, and a tagger without an email
         git(root, "tag", "HEAD", c1.id());
         git(root, Map.of("GIT_COMMITTER_EMAIL", ""), "-c", "user.useConfigOnly=false", "tag", "-a", "-m", "no email", "noemail", c1.id());
+        git(root, "update-ref", "refs/tags/-legacy", c1.id());
         git(root, "fsck", "--strict");
 
         for (boolean packed : new boolean[]{false, true}) {
             if (packed) git(root, "pack-refs", "--all");
-            assertEquals(List.of("HEAD", "noemail"), repo.tags().stream().map(Tag::name).toList());
+            assertEquals(List.of("-legacy", "HEAD", "noemail"), repo.tags().stream().map(Tag::name).toList());
             var infos = repo.tagInfos();
-            assertEquals(c1.id(), infos.get(0).target().id());
-            assertTrue(infos.get(1).annotated());
-            assertEquals(Optional.empty(), infos.get(1).tagger());
-            assertEquals(Optional.of("no email\n"), infos.get(1).message());
+            assertEquals(c1.id(), infos.get(1).target().id());
+            assertTrue(infos.get(2).annotated());
+            assertEquals(Optional.empty(), infos.get(2).tagger());
+            assertEquals(Optional.of("no email\n"), infos.get(2).message());
             assertEquals(c1.id(), repo.resolve(repo.tag("HEAD")));
         }
         repo.createTag("other", c1);
         repo.deleteTag("HEAD");
+        repo.deleteTag("-legacy");
         assertEquals(List.of("noemail", "other"), repo.tags().stream().map(Tag::name).toList());
         assertEquals("noemail\nother", git(root, "tag", "-l").strip());
     }
