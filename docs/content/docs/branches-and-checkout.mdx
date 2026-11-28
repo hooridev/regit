@@ -113,3 +113,38 @@ repo.checkoutFiles(previous, Path.of("pom.xml"), Path.of("src/main/Config.java")
 <Callout type="info" title="Checking out conflict sides (`--ours` / `--theirs`)">
   During a merge or rebase conflict, use `repo.checkoutOurs(...)` and `repo.checkoutTheirs(...)` — see [Merge, Rebase & Conflict Resolution](/docs/merge-and-rebase#resolving-conflicts-with---ours--theirs).
 </Callout>
+
+## Tags (`git tag`)
+
+A `Tag` handle is scoped to its owning repository and implements `CommitRef`, so it can be passed directly to `checkoutDetached`, `addWorktreeDetached`, `diff`, `log`, `getCommit`, and other revision-accepting methods.
+
+```java title="Tags.java"
+// Create a lightweight tag at HEAD or at any CommitRef
+Tag latest = repo.createTag("latest");
+Tag v1 = repo.createTag("v1.0", repo.getCommit("HEAD~1"));
+
+// Create an annotated tag (`git tag -a`)
+Tag v2 = repo.createAnnotatedTag("v2.0", repo.currentBranch(), author, "Release 2.0\n");
+
+// Look up and list tags (reads both loose refs and packed-refs)
+Tag lookedUp = repo.tag("v2.0");
+List<Tag> allTags = repo.tags();
+
+// Inspect detailed tag metadata (peeled commit, tag object ID, tagger, message)
+// Tags targeting non-commit objects (trees/blobs) are omitted from tagInfos()
+for (TagInfo info : repo.tagInfos()) {
+    System.out.printf("%-12s %s%s%n",
+        info.tag().name(),
+        info.target().shortId(),
+        info.annotated() ? " " + info.message().orElse("").strip() : "");
+}
+
+// Use a Tag directly as a CommitRef
+Commit detached = repo.checkoutDetached(v2);
+Diff releaseDiff = repo.diff(v1, v2);
+List<Commit> releaseLog = repo.log(Log.range(v1, v2));
+
+// Delete a tag (`git tag -d`)
+repo.deleteTag(latest);
+repo.deleteTag("v1.0");
+```

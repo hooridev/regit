@@ -942,6 +942,60 @@ public final class Repository {
         return forceCreateBranch(name, CommitRef.of(startPoint));
     }
 
+    /** List all tags sorted by name ({@code git tag -l}), including tags pointing to non-commit objects. */
+    public List<Tag> tags() throws IOException {
+        return Tags.names(layout).stream().map(name -> new Tag(layout, name)).toList();
+    }
+
+    /**
+     * Detailed metadata for all tags targeting commits ({@code git tag -n}).
+     * Tags whose target does not peel to a commit (e.g. tree or blob tags) are skipped.
+     */
+    public List<TagInfo> tagInfos() throws IOException {
+        return Tags.infos(layout, db);
+    }
+
+    /** Look up an existing tag by its short name ({@code git tag -l <name>}). */
+    public Tag tag(String name) throws IOException {
+        if (!Tags.exists(layout, name)) throw new IOException("Missing tag: " + name);
+        return new Tag(layout, name);
+    }
+
+    /** Create a lightweight tag at {@code HEAD} ({@code git tag <name>}). */
+    public Tag createTag(String name) throws IOException {
+        return createTag(name, CommitRef.of("HEAD"));
+    }
+
+    /** Create a lightweight tag pointing to {@code target} ({@code git tag <name> <target>}). */
+    public Tag createTag(String name, CommitRef target) throws IOException {
+        String commitId = new Revisions(layout, db).resolveCommit(target);
+        Tags.create(layout, name, commitId);
+        return new Tag(layout, name);
+    }
+
+    /**
+     * Create an annotated tag object targeting {@code target} ({@code git tag -a <name> <target>}).
+     * Message is stored verbatim, including any trailing newline.
+     */
+    public Tag createAnnotatedTag(String name, CommitRef target, Identity tagger, String message) throws IOException {
+        Objects.requireNonNull(tagger, "tagger");
+        Objects.requireNonNull(message, "message");
+        String commitId = new Revisions(layout, db).resolveCommit(target);
+        Tags.createAnnotated(layout, db, name, commitId, tagger, message);
+        return new Tag(layout, name);
+    }
+
+    /** Delete an existing tag by name ({@code git tag -d <name>}). */
+    public void deleteTag(String name) throws IOException {
+        Tags.delete(layout, name);
+    }
+
+    /** Delete an existing tag ({@code git tag -d <tag>}). */
+    public void deleteTag(Tag tag) throws IOException {
+        Objects.requireNonNull(tag, "tag").refNameIn(layout);
+        Tags.delete(layout, tag.name());
+    }
+
     public void switchBranch(Branch branch) throws IOException { switchBranch(branch.nameIn(layout)); }
 
     public void switchBranch(String name) throws IOException {
