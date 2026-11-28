@@ -1111,7 +1111,7 @@ public final class Repository {
                 var entries = new TreeMap<>(Index.readStage0(layout.index()));
                 for (String path : paths) {
                     Entry entry = treeFiles.get(path);
-                    entries.put(path, new Index.EntryRecord(path, entry, 0, false, work.materializeEntry(path, entry)));
+                    entries.put(path, new Index.EntryRecord(path, entry, 0, false, work.materializeEntry(path, entry, false)));
                 }
                 lock.publish(Index.encodeStage0(layout, db, entries));
             }

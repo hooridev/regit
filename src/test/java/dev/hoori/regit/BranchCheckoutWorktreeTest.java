@@ -401,4 +401,74 @@ class BranchCheckoutWorktreeTest {
         assertEquals(1, repo.worktreeList().size());
         git(root, "fsck", "--strict");
     }
+
+    @Test void checkoutRollbackKeepsFileRecreatedAtDeletedPath() throws Exception {
+        Path root = tmp.resolve("rollback");
+        Files.createDirectories(root);
+        git(root, "init", "-q");
+        Path file = Files.writeString(root.resolve("a.txt"), "tracked\n");
+        var entry = new Entry(Entry.FILE, git(root, "hash-object", "-w", "a.txt"));
+        var work = new WorkingTree(root, new ObjectsDb(root.resolve(".git")));
+        var failure = assertThrows(IOException.class, () -> work.checkout(Map.of("a.txt", entry), Map.of(), Map.of(),
+                written -> { Files.writeString(file, "theirs\n"); throw new IOException("publish failed"); }));
+        assertEquals("publish failed", failure.getMessage());
+        assertEquals("theirs\n", Files.readString(file));
+    }
+
+    @Test void checkoutRollbackRemovesOnlyFilesItStillOwns() throws Exception {
+        Path root = tmp.resolve("created");
+        Files.createDirectories(root);
+        git(root, "init", "-q");
+        Files.writeString(root.resolve("src.txt"), "ours\n");
+        var entry = new Entry(Entry.FILE, git(root, "hash-object", "-w", "src.txt"));
+        var work = new WorkingTree(root, new ObjectsDb(root.resolve(".git")));
+        Path file = root.resolve("n.txt");
+        assertThrows(IOException.class, () -> work.checkout(Map.of(), Map.of("n.txt", entry), Map.of(),
+                written -> { throw new IOException("publish failed"); }));
+        assertFalse(Files.exists(file));
+        assertThrows(IOException.class, () -> work.checkout(Map.of(), Map.of("n.txt", entry), Map.of(),
+                written -> { Files.writeString(file, "theirs\n"); throw new IOException("publish failed"); }));
+        assertEquals("theirs\n", Files.readString(file));
+        Files.delete(file);
+        assertThrows(IOException.class, () -> work.checkout(Map.of(), Map.of("n.txt", entry), Map.of(), written -> {
+            Files.delete(file);
+            writeFile(file, "inner.txt", "theirs\n");
+            throw new IOException("publish failed");
+        }));
+        assertEquals("theirs\n", Files.readString(file.resolve("inner.txt")));
+    }
+
+    @Test void publishOfNewFileNeverReplacesOneThatAppeared() throws Exception {
+        Path tmpFile = Files.writeString(tmp.resolve(".regit-new"), "ours\n");
+        Path target = Files.writeString(tmp.resolve("appeared.txt"), "theirs\n");
+        assertThrows(FileAlreadyExistsException.class, () -> WorkingTree.publish(tmpFile, target, true));
+        assertEquals("theirs\n", Files.readString(target));
+        Path fresh = tmp.resolve("fresh.txt");
+        WorkingTree.publish(tmpFile, fresh, true);
+        assertEquals("ours\n", Files.readString(fresh));
+    }
+
+    @Test void removeDirectoryRemovesEmptyDirectoryAndRefusesRegularFile() throws Exception {
+        Path file = tmp.resolve("regular.txt");
+        Files.writeString(file, "keep\n");
+        assertThrows(IOException.class, () -> WorkingTree.removeDirectory(file));
+        assertEquals("keep\n", Files.readString(file));
+
+        Path nonEmpty = tmp.resolve("non-empty");
+        writeFile(nonEmpty, "child.txt", "stay\n");
+        assertThrows(IOException.class, () -> WorkingTree.removeDirectory(nonEmpty));
+        assertTrue(Files.isDirectory(nonEmpty));
+
+        Path empty = tmp.resolve("empty");
+        Files.createDirectory(empty);
+        try (var stream = Files.newDirectoryStream(tmp)) {
+            if (stream instanceof SecureDirectoryStream) {
+                WorkingTree.removeDirectory(empty);
+                assertFalse(Files.exists(empty));
+            } else {
+                assertThrows(IOException.class, () -> WorkingTree.removeDirectory(empty));
+                assertTrue(Files.isDirectory(empty));
+            }
+        }
+    }
 }

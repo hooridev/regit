@@ -1,6 +1,7 @@
 package dev.hoori.regit;
 
 import java.io.*;
+import java.nio.channels.Channels;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
@@ -84,11 +85,11 @@ final class WorkingTree {
             for (String name : changed) {
                 if (to.containsKey(name)) continue;
                 Files.delete(resolve(name));
-                undo.push(() -> replace(name, from.get(name)));
+                undo.push(() -> replace(name, from.get(name), true)); // a file that appeared there since is not ours
             }
             for (var directory : directories) {
-                try { Files.delete(directory); }
-                catch (DirectoryNotEmptyException keep) { continue; }
+                try { removeDirectory(directory); }
+                catch (IOException keep) { continue; } // not empty, gone, no longer a directory, or not safely removable
                 undo.push(() -> Files.createDirectory(directory));
             }
             for (String name : changed) {
@@ -97,10 +98,12 @@ final class WorkingTree {
                 for (Path p = resolve(name).getParent(); Files.notExists(p); p = p.getParent()) missing.push(p);
                 for (Path directory : missing) {
                     Files.createDirectory(directory);
-                    undo.push(() -> Files.delete(directory));
+                    undo.push(() -> removeDirectory(directory));
                 }
-                written.put(name, replace(name, to.get(name)));
-                undo.push(() -> replace(name, from.get(name)));
+                written.put(name, replace(name, to.get(name), !from.containsKey(name))); // preflight: new paths are absent
+                Entry ours = to.get(name);
+                if (from.containsKey(name)) undo.push(() -> replace(name, from.get(name), false));
+                else undo.push(() -> removeCreated(name, ours));
             }
             publish.run(written);
         } catch (IOException | RuntimeException failure) {
@@ -110,15 +113,31 @@ final class WorkingTree {
             throw failure;
         }
     }
-    Index.Stat materializeEntry(String name, Entry entry) throws IOException {
-        return replace(name, entry);
+    Index.Stat materializeEntry(String name, Entry entry, boolean mustCreate) throws IOException {
+        return replace(name, entry, mustCreate);
+    }
+
+    /** Undo a file this checkout created: delete it only while it holds {@code ours}, never a file that replaced it. */
+    private void removeCreated(String name, Entry ours) throws IOException {
+        Path file = resolve(name), aside = file.resolveSibling(".regit-" + UUID.randomUUID());
+        try { Files.move(file, aside, StandardCopyOption.ATOMIC_MOVE); } // atomically takes whatever is there now
+        catch (NoSuchFileException gone) { return; }
+        boolean owned;
+        try { owned = Files.isRegularFile(aside, NOFOLLOW_LINKS) && db.blob(aside, false).equals(ours.hash()); }
+        catch (IOException unreadable) { owned = false; } // cannot prove it is ours: put it back
+        if (owned) Files.delete(aside);
+        // Not ours: put it back without replacing anything; if that fails it stays aside.
+        // rename(2) never replaces a file or a non-empty directory; link(2) never replaces anything.
+        else if (Files.isDirectory(aside, NOFOLLOW_LINKS)) Files.move(aside, file, StandardCopyOption.ATOMIC_MOVE);
+        else { Files.createLink(file, aside); Files.delete(aside); }
     }
 
     /** Write arbitrary bytes to a worktree file (e.g. conflict markers), creating parent directories. */
     void writeRaw(String name, byte[] content, int mode) throws IOException {
         Path file = resolve(name);
         Files.createDirectories(file.getParent());
-        Path tmp = Files.exists(file) ? Files.createTempFile(file.getParent(), ".regit-", ".tmp")
+        boolean create = !Files.exists(file, NOFOLLOW_LINKS);
+        Path tmp = !create ? Files.createTempFile(file.getParent(), ".regit-", ".tmp")
                 : Files.createFile(file.resolveSibling(".regit-" + UUID.randomUUID()));
         try {
             Files.write(tmp, content);
@@ -132,7 +151,7 @@ final class WorkingTree {
                 }
                 Files.setPosixFilePermissions(tmp, permissions);
             }
-            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            publish(tmp, file, create);
         } finally { Files.deleteIfExists(tmp); }
     }
 
@@ -141,6 +160,12 @@ final class WorkingTree {
      * the stat of each written file.
      */
     Map<String, Index.Stat> forceReset(Set<String> previouslyTracked, Map<String, Entry> to) throws IOException {
+        return forceReset(previouslyTracked, to, Set.of());
+    }
+
+    /** As above; paths in {@code created} were preflighted as absent and are written without replacing anything. */
+    Map<String, Index.Stat> forceReset(Set<String> previouslyTracked, Map<String, Entry> to, Set<String> created)
+            throws IOException {
         var directories = new TreeSet<Path>(Comparator.comparingInt(Path::getNameCount)
                 .reversed().thenComparing(Comparator.naturalOrder()));
         for (String name : previouslyTracked) {
@@ -151,22 +176,28 @@ final class WorkingTree {
             }
         }
         for (Path dir : directories) {
-            try { Files.deleteIfExists(dir); }
-            catch (DirectoryNotEmptyException ignored) {}
+            try { removeDirectory(dir); }
+            catch (IOException ignored) {} // not empty, gone, no longer a directory, or not safely removable
         }
         var written = new HashMap<String, Index.Stat>();
         for (var e : to.entrySet()) {
-            written.put(e.getKey(), replace(e.getKey(), e.getValue()));
+            // A file at a directory we pruned is not ours, so writing there must not replace it.
+            boolean mustCreate = created.contains(e.getKey()) || directories.contains(resolve(e.getKey()));
+            written.put(e.getKey(), replace(e.getKey(), e.getValue(), mustCreate));
         }
         return written;
     }
 
-    /** Write {@code entry} (or delete for null) and return the file's stat, taken after the move as rename sets ctime. */
-    private Index.Stat replace(String name, Entry entry) throws IOException {
+    /**
+     * Write {@code entry} (or delete for null) and return the file's stat, taken after the move as rename sets ctime.
+     * With {@code mustCreate} the write fails rather than replace a file at {@code name}.
+     */
+    private Index.Stat replace(String name, Entry entry, boolean mustCreate) throws IOException {
         Path file = resolve(name);
         if (entry == null) { Files.delete(file); return null; }
         Files.createDirectories(file.getParent());
-        Path tmp = Files.exists(file) ? Files.createTempFile(file.getParent(), ".regit-", ".tmp")
+        boolean create = mustCreate || !Files.exists(file, NOFOLLOW_LINKS);
+        Path tmp = !create ? Files.createTempFile(file.getParent(), ".regit-", ".tmp")
                 : Files.createFile(file.resolveSibling(".regit-" + UUID.randomUUID()));
         try {
             db.materialize(entry.hash(), tmp);
@@ -180,9 +211,37 @@ final class WorkingTree {
                 }
                 Files.setPosixFilePermissions(tmp, permissions);
             }
-            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            publish(tmp, file, create);
         } finally { Files.deleteIfExists(tmp); }
         try { return Index.Stat.of(file); }
         catch (IOException unreadable) { return null; } // The file is written; the index write rehashes it instead.
+    }
+
+    /** Move {@code tmp} to {@code file}; a new file is created no-clobber, so one that appeared meanwhile survives. */
+    static void publish(Path tmp, Path file, boolean create) throws IOException {
+        if (!create) { Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); return; }
+        try { Files.createLink(file, tmp); } // link(2) fails with EEXIST instead of replacing
+        catch (UnsupportedOperationException | FileSystemException noLink) {
+            if (noLink instanceof FileAlreadyExistsException exists) throw exists;
+            // No hard links (e.g. FAT): CREATE_NEW is O_EXCL, like Git; readers may see a partial file, never a replaced one.
+            // The prepared mode is set at creation (less umask, as Git does), never later by path.
+            var mode = Files.getFileStore(tmp).supportsFileAttributeView(PosixFileAttributeView.class)
+                    ? new FileAttribute<?>[] {PosixFilePermissions.asFileAttribute(Files.getPosixFilePermissions(tmp))}
+                    : new FileAttribute<?>[0];
+            try (var out = Channels.newOutputStream(Files.newByteChannel(file,
+                    Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE), mode))) { Files.copy(tmp, out); }
+        }
+    }
+
+    /** rmdir: removes only an (empty) directory, never a file that took its place. */
+    static void removeDirectory(Path dir) throws IOException {
+        try (var parent = Files.newDirectoryStream(dir.getParent())) {
+            if (parent instanceof SecureDirectoryStream<Path> secure) {
+                secure.deleteDirectory(dir.getFileName()); // unlinkat(AT_REMOVEDIR): fails for a file
+                return;
+            }
+        }
+        // No directory-only delete here (e.g. Windows): refuse rather than risk deleting a file.
+        throw new IOException("Cannot safely remove directory " + dir);
     }
 }
