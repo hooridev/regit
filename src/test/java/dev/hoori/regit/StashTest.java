@@ -557,7 +557,7 @@ class StashTest {
         assertTrue(git(root, "ls-files").contains("added"));
     }
 
-    @Test void stashCommitsMatchNativeGitByteForByte() throws Exception {
+    @Test void stashCommitMessagesEndLikeNativeGit() throws Exception {
         commit("a.txt", "a\n", "add a");
         Files.writeString(root.resolve("a.txt"), "changed\n");
         repo.withAuthor(WHO).stashPush().orElseThrow();
@@ -567,5 +567,17 @@ class StashTest {
             int printed = git(root, "cat-file", "commit", rev).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
             assertEquals(rev.equals("stash@{0}") ? 0 : 1, size - printed, rev);
         }
+    }
+
+    @Test void applyRefusesAnUntrackedFileWhereTheMergeStillTracksADirectory() throws Exception {
+        commit("d/f", "nested\n", "add d/f");
+        Files.delete(root.resolve("d/f"));
+        Files.delete(root.resolve("d"));
+        Files.writeString(root.resolve("d"), "now a file\n");
+        repo.withAuthor(WHO).stashPush(StashOptions.defaults().includeUntracked()).orElseThrow();
+        commit("d/f", "changed upstream\n", "change d/f");
+        assertThrows(IOException.class, () -> repo.stashApply());
+        assertEquals("changed upstream\n", Files.readString(root.resolve("d/f")));
+        assertEquals(1, repo.stashList().size());
     }
 }

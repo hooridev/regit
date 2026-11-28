@@ -226,9 +226,17 @@ final class Stash {
             }
 
             // Preflight: every untracked file restored from u must not exist yet
+            var mergedDirectories = new HashSet<String>(); // every directory the merge result keeps a path in
+            if (!untrackedFiles.isEmpty()) {
+                for (var merged : List.of(outcome.resolved().keySet(), outcome.conflicts().keySet()))
+                    for (String tracked : merged)
+                        for (int slash = tracked.indexOf('/'); slash >= 0; slash = tracked.indexOf('/', slash + 1))
+                            mergedDirectories.add(tracked.substring(0, slash));
+            }
             for (String path : untrackedFiles.keySet()) {
                 if (outcome.resolved().containsKey(path) || outcome.conflicts().containsKey(path))
                     throw new IOException("Untracked file already exists: " + path);
+                if (mergedDirectories.contains(path)) throw new IOException("Untracked file blocked by tracked files in " + path);
                 Path file = work.resolve(path);
                 for (Path p = file.getParent(); !p.equals(layout.root()); p = p.getParent()) {
                     String rel = layout.root().relativize(p).toString().replace(p.getFileSystem().getSeparator(), "/");
@@ -334,6 +342,7 @@ final class Stash {
                 }
                 kept.add(line);
             }
+            // Log first: git appends to this log under refs/stash.lock, so that lock must outlive the log write.
             logLock.publish(formatLog(kept));
             refLock.publish(kept.getLast().newId() + "\n");
         }
@@ -361,6 +370,7 @@ final class Stash {
             throws IOException {
         Path file = work.resolve(name);
         if (Files.isDirectory(file, NOFOLLOW_LINKS)) {
+            requireRemovable(file);
             try (var contents = Files.walk(file)) {
                 for (Path child : contents.toList()) {
                     String rel = root.relativize(child).toString().replace(child.getFileSystem().getSeparator(), "/");
@@ -393,7 +403,7 @@ final class Stash {
         }
         for (Path dir : directories) {
             try { removeDirectory(dir); }
-            catch (IOException keep) {} // not empty, gone, or no longer a directory: leave it
+            catch (IOException keep) {} // not empty, gone, no longer a directory, or not safely removable: leave it
         }
     }
 
@@ -404,16 +414,22 @@ final class Stash {
         }
     }
 
-    /** rmdir: park the path with an atomic rename first, so a file that took its place is moved back, never deleted. */
+    /** rmdir: removes only an (empty) directory, never a file that took its place. */
     private static void removeDirectory(Path dir) throws IOException {
-        Path parked = dir.resolveSibling(".regit-rmdir-" + UUID.randomUUID());
-        Files.move(dir, parked, StandardCopyOption.ATOMIC_MOVE);
-        try {
-            if (!Files.isDirectory(parked, NOFOLLOW_LINKS)) throw new IOException("Path changed during stash: " + dir);
-            Files.delete(parked); // fails for a directory that is no longer empty
-        } catch (IOException changed) {
-            if (Files.exists(parked, NOFOLLOW_LINKS)) Files.move(parked, dir, StandardCopyOption.ATOMIC_MOVE);
-            throw changed;
+        try (var parent = Files.newDirectoryStream(dir.getParent())) {
+            if (parent instanceof SecureDirectoryStream<Path> secure) {
+                secure.deleteDirectory(dir.getFileName()); // unlinkat(AT_REMOVEDIR): fails for a file
+                return;
+            }
+        }
+        // No directory-only delete here (e.g. Windows): refuse rather than risk deleting a file.
+        throw new IOException("Cannot safely remove directory " + dir);
+    }
+
+    /** Fail before any change when {@link #removeDirectory} could not remove {@code dir} later. */
+    private static void requireRemovable(Path dir) throws IOException {
+        try (var parent = Files.newDirectoryStream(dir.getParent())) {
+            if (!(parent instanceof SecureDirectoryStream)) throw new IOException("Cannot safely remove directory " + dir);
         }
     }
 
@@ -434,6 +450,7 @@ final class Stash {
             throws IOException {
         Path file = work.resolve(path);
         if (Files.isDirectory(file, NOFOLLOW_LINKS)) {
+            requireRemovable(file);
             try (var contents = Files.walk(file)) {
                 for (Path child : contents.filter(c -> !Files.isDirectory(c, NOFOLLOW_LINKS)).toList()) {
                     String rel = root.relativize(child).toString().replace(child.getFileSystem().getSeparator(), "/");
