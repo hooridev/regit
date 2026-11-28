@@ -19,11 +19,12 @@ public final class Log {
         TOPO
     }
 
-    sealed interface Target permits Target.Spec, Target.BranchRef, Target.CommitRefTarget, Target.RemoteBranchRef, Target.Symmetric {
+    sealed interface Target permits Target.Spec, Target.BranchRef, Target.CommitRefTarget, Target.RemoteBranchRef, Target.TagRef, Target.Symmetric {
         record Spec(String value) implements Target {}
         record BranchRef(Branch branch) implements Target {}
         record CommitRefTarget(Commit commit) implements Target {}
         record RemoteBranchRef(RemoteBranch branch) implements Target {}
+        record TagRef(Tag tag) implements Target {}
         record Symmetric(Target left, Target right) implements Target {}
     }
 
@@ -107,7 +108,7 @@ public final class Log {
     /** Start from one or more remote-tracking branches. */
     public static Log from(RemoteBranch... branches) { return EMPTY.include(branches); }
 
-    /** Start from a single {@link CommitRef} ({@link Branch}, {@link Commit}, {@link RemoteBranch}, or spec). */
+    /** Start from a single {@link CommitRef} ({@link Branch}, {@link Commit}, {@link RemoteBranch}, {@link Tag}, or spec). */
     public static Log from(CommitRef target) { return EMPTY.includeTarget(toTarget(target)); }
 
     /** Commits reachable from {@code include} but not from {@code exclude} ({@code exclude..include}). */
@@ -135,6 +136,7 @@ public final class Log {
             case Commit c -> new Target.CommitRefTarget(c);
             case Branch b -> new Target.BranchRef(b);
             case RemoteBranch rb -> new Target.RemoteBranchRef(rb);
+            case Tag t -> new Target.TagRef(t);
             case CommitRef.Spec s -> new Target.Spec(s.expression());
         };
     }

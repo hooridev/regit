@@ -48,8 +48,11 @@ final class Branches {
     }
 
     static void clearEmptyRefDir(Layout layout, String name) throws IOException {
+        clearEmptyRefDir(layout.ref(name));
+    }
+
+    static void clearEmptyRefDir(Path target) throws IOException {
         // Git can leave empty ref directories behind after packing or deleting their children.
-        Path target = layout.ref(name);
         if (Files.isDirectory(target)) {
             try (var paths = Files.walk(target)) {
                 for (var path : paths.sorted(Comparator.reverseOrder()).toList()) {

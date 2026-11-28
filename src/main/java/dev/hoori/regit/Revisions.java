@@ -42,11 +42,19 @@ final class Revisions {
         return peelToCommit(id);
     }
 
+    String resolveTag(Tag tag) throws IOException {
+        String ref = tag.refNameIn(layout);
+        String id = readRef(ref, 0);
+        if (id == null) throw new IOException("Missing tag: " + tag.name());
+        return peelToCommit(id);
+    }
+
     String resolveCommit(CommitRef ref) throws IOException {
         return switch (Objects.requireNonNull(ref, "ref")) {
             case Commit c -> resolveCommitObject(c);
             case Branch b -> resolveBranch(b);
             case RemoteBranch rb -> resolveRemoteBranch(rb);
+            case Tag t -> resolveTag(t);
             case CommitRef.Spec s -> resolveCommit(s.expression());
         };
     }
@@ -383,7 +391,7 @@ final class Revisions {
         return true;
     }
 
-    private String readRef(String refName, int depth) throws IOException {
+    String readRef(String refName, int depth) throws IOException {
         if (depth > 8) throw new IOException("Symbolic ref loop: " + refName);
         if (ADMIN_REFS.contains(refName)) {
             Path file = layout.admin().resolve(refName);
@@ -433,7 +441,7 @@ final class Revisions {
         return commit;
     }
 
-    private String tryPeelToCommit(String oid) throws IOException {
+    String tryPeelToCommit(String oid) throws IOException {
         String current = oid;
         for (int depth = 0; depth < 16; depth++) {
             var value = db.get(current);
@@ -444,7 +452,7 @@ final class Revisions {
         throw new IOException("Tag indirection loop at " + oid);
     }
 
-    private static String tagTarget(byte[] data) throws IOException {
+    static String tagTarget(byte[] data) throws IOException {
         int end = 0;
         while (end < data.length && data[end] != '\n') end++;
         String first = new String(data, 0, end, US_ASCII);

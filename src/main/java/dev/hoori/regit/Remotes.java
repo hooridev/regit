@@ -246,9 +246,22 @@ final class Remotes {
         Path packed = layout.common().resolve("packed-refs");
         try (var lock = new Lock(packed)) {
             if (Files.exists(packed)) {
-                var lines = new ArrayList<>(Files.readAllLines(packed));
-                if (lines.removeIf(l -> l.length() > 41 && l.endsWith(" " + fullRef))) {
-                    lock.publish(String.join("\n", lines) + (lines.isEmpty() ? "" : "\n"));
+                var kept = new ArrayList<String>();
+                boolean removed = false;
+                boolean dropPeel = false;
+                for (String line : Files.readAllLines(packed)) {
+                    if (dropPeel && line.startsWith("^")) continue;
+                    dropPeel = false;
+                    if (line.length() > 41 && !line.startsWith("#") && !line.startsWith("^")
+                            && line.charAt(40) == ' ' && line.substring(41).equals(fullRef)) {
+                        removed = true;
+                        dropPeel = true;
+                        continue;
+                    }
+                    kept.add(line);
+                }
+                if (removed) {
+                    lock.publish(String.join("\n", kept) + (kept.isEmpty() ? "" : "\n"));
                 }
             }
             Files.deleteIfExists(loose);
