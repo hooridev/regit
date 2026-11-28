@@ -33,18 +33,15 @@ final class Worktrees {
             result.add(new WorktreeInfo(layout.common(), Optional.empty(), Optional.empty(),
                     false, true, false, Optional.empty(), false));
         } else {
-            Path mainRoot = (layout.root() != null && layout.admin().equals(layout.common()))
-                    ? layout.root() : layout.common().getParent();
-            result.add(inspectEntry(layout, db, mainRoot, layout.common(), false));
+            result.add(inspectEntry(layout, db, mainRoot(layout), layout.common(), null));
         }
         Path registry = layout.common().resolve("worktrees");
         if (Files.isDirectory(registry)) {
             try (var dirs = Files.list(registry)) {
                 for (var dir : dirs.sorted().toList()) {
-                    Path gitdir = dir.resolve("gitdir");
-                    if (!Files.isRegularFile(gitdir)) continue;
-                    Path wtRoot = dir.resolve(line(gitdir)).normalize().getParent();
-                    result.add(inspectEntry(layout, db, wtRoot, dir, true));
+                    Path gitfile = readGitfile(dir);
+                    if (gitfile == null || gitfile.getParent() == null) continue;
+                    result.add(inspectEntry(layout, db, gitfile.getParent(), dir, gitfile));
                 }
             }
         }
@@ -54,8 +51,7 @@ final class Worktrees {
     static Map<String, Path> branchWorktrees(Layout layout) throws IOException {
         var map = new HashMap<String, Path>();
         if (!layout.isBareCommon()) {
-            Path mainRoot = (layout.root() != null && layout.admin().equals(layout.common()))
-                    ? layout.root() : layout.common().getParent();
+            Path mainRoot = mainRoot(layout);
             String head = line(layout.common().resolve("HEAD"));
             if (head.startsWith("ref: refs/heads/")) map.put(head.substring(16), mainRoot);
         }
@@ -77,11 +73,11 @@ final class Worktrees {
         return map;
     }
 
-    private static WorktreeInfo inspectEntry(Layout owner, ObjectsDb db, Path wtRoot, Path adminDir, boolean linked)
+    private static WorktreeInfo inspectEntry(Layout owner, ObjectsDb db, Path wtRoot, Path adminDir, Path gitfile)
             throws IOException {
-        boolean prunable = linked && !Files.isDirectory(wtRoot);
         Path lockFile = adminDir.resolve("locked");
         boolean locked = Files.exists(lockFile);
+        boolean prunable = gitfile != null && !locked && stale(adminDir, gitfile);
         Optional<String> lockReason = Optional.empty();
         if (locked) {
             String reason = Files.readString(lockFile).strip();
@@ -118,6 +114,8 @@ final class Worktrees {
         try {
             Files.createDirectories(linked);
             admin = Files.createTempDirectory(linked, "wt-");
+            // As git does: a concurrent prune must not take the entry before its .git file exists.
+            Files.writeString(admin.resolve("locked"), "initializing\n");
             var child = new Layout(dest, admin, owner.common());
             Files.writeString(admin.resolve("commondir"), "../..\n");
             Files.writeString(admin.resolve("gitdir"), dest.resolve(".git") + "\n");
@@ -130,6 +128,7 @@ final class Worktrees {
                     Files.writeString(gitfile, pointer, StandardOpenOption.CREATE_NEW);
                 });
             }
+            Files.delete(admin.resolve("locked"));
             return child;
         } catch (IOException e) {
             if (admin != null) {
@@ -179,12 +178,135 @@ final class Worktrees {
                     }
                 });
             } else {
-                try (var paths = Files.walk(child.root())) {
-                    for (var path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);
-                }
+                deleteRecursively(child.root());
             }
         }
-        try (var paths = Files.walk(child.admin())) {
+        deleteRecursively(child.admin());
+    }
+
+    /** Lock a linked worktree against pruning and removal ({@code git worktree lock}). */
+    static void lock(Layout layout, Path worktreePath, String reason) throws IOException {
+        Path admin = findLinkedAdmin(layout, worktreePath);
+        String content = (reason == null || reason.isEmpty()) ? "" : (reason.endsWith("\n") ? reason : reason + "\n");
+        try {
+            Files.writeString(admin.resolve("locked"), content, StandardOpenOption.CREATE_NEW);
+        } catch (FileAlreadyExistsException e) {
+            throw new IOException("Worktree is already locked: " + worktreePath, e);
+        }
+    }
+
+    /** Unlock a previously locked linked worktree ({@code git worktree unlock}). */
+    static void unlock(Layout layout, Path worktreePath) throws IOException {
+        Path admin = findLinkedAdmin(layout, worktreePath);
+        try {
+            Files.delete(admin.resolve("locked"));
+        } catch (NoSuchFileException e) {
+            throw new IOException("Worktree is not locked: " + worktreePath, e);
+        }
+    }
+
+    /** Delete stale unlocked linked worktree admin entries ({@code git worktree prune}). */
+    static List<Path> prune(Layout layout) throws IOException {
+        Path registry = layout.common().resolve("worktrees");
+        if (!Files.isDirectory(registry)) return List.of();
+        var pruned = new ArrayList<Path>();
+        try (var dirs = Files.list(registry)) {
+            for (var dir : dirs.sorted().toList()) {
+                if (!Files.isDirectory(dir)) continue;
+                if (Files.exists(dir.resolve("locked"))) continue;
+                Path gitfile = readGitfile(dir);
+                if (gitfile != null && !stale(dir, gitfile)) continue;
+                deleteRecursively(dir);
+                if (gitfile != null && gitfile.getParent() != null) pruned.add(gitfile.getParent());
+            }
+        }
+        return List.copyOf(pruned);
+    }
+
+    private static Path findLinkedAdmin(Layout layout, Path worktreePath) throws IOException {
+        Objects.requireNonNull(worktreePath, "worktreePath");
+        Path normalized = worktreePath.toAbsolutePath().normalize();
+        Path canonical = canonicalPath(normalized);
+        if (!layout.isBareCommon()) {
+            Path mainRoot = mainRoot(layout);
+            if (mainRoot != null && samePath(normalized, canonical, mainRoot))
+                throw new IOException("Main worktree cannot be locked or unlocked: " + worktreePath);
+        }
+        Path registry = layout.common().resolve("worktrees");
+        if (!Files.isDirectory(registry)) throw new IOException("Worktree not found: " + worktreePath);
+        // A live checkout names its own registration; stale ones can share its path after the path was reused.
+        Path pointer = canonical.resolve(".git");
+        if (Files.isRegularFile(pointer)) {
+            String link = line(pointer);
+            if (link.startsWith("gitdir: ")) {
+                Path admin = canonical.resolve(link.substring(8)).normalize();
+                Path backlink = Files.isDirectory(admin) ? readGitfile(admin) : null;
+                if (backlink != null && admin.toRealPath().getParent().equals(registry.toRealPath())
+                        && samePath(normalized, canonical, backlink.getParent())) return admin;
+            }
+        }
+        var matches = new ArrayList<Path>();
+        try (var dirs = Files.list(registry)) {
+            for (var dir : dirs.sorted().toList()) {
+                if (!Files.isDirectory(dir)) continue;
+                Path gitfile = readGitfile(dir);
+                if (gitfile != null && gitfile.getParent() != null
+                        && samePath(normalized, canonical, gitfile.getParent())) matches.add(dir);
+            }
+        }
+        if (matches.size() == 1) return matches.get(0);
+        throw new IOException((matches.isEmpty() ? "Worktree not found: " : "Worktree registered more than once: ")
+                + worktreePath);
+    }
+
+    private static Path mainRoot(Layout layout) {
+        return (layout.root() != null && layout.admin().equals(layout.common()))
+                ? layout.root() : layout.common().getParent();
+    }
+
+    private static Path readGitfile(Path adminDir) {
+        Path gitdir = adminDir.resolve("gitdir");
+        if (!Files.isRegularFile(gitdir)) return null;
+        try {
+            String raw = line(gitdir);
+            return raw.isEmpty() ? null : adminDir.resolve(raw).normalize();
+        } catch (IOException | InvalidPathException e) {
+            return null;
+        }
+    }
+
+    /** The checkout is gone, or its {@code .git} file now belongs to another registration (path reused). */
+    private static boolean stale(Path adminDir, Path gitfile) throws IOException {
+        if (!Files.exists(gitfile)) return true;
+        if (!Files.isRegularFile(gitfile)) return false;
+        String link = line(gitfile);
+        if (!link.startsWith("gitdir: ")) return false;
+        Path target = gitfile.getParent().resolve(link.substring(8)).normalize();
+        // Stale only when another registration claims this checkout. A dangling or foreign pointer
+        // (repository moved, .git copied) is kept, as git does: repair, not prune.
+        if (!Files.isDirectory(target) || Files.isSameFile(target, adminDir)) return false;
+        Path claimed = readGitfile(target);
+        return claimed != null && Files.exists(claimed) && Files.isSameFile(claimed, gitfile);
+    }
+
+    private static Path canonicalPath(Path normalized) {
+        try {
+            if (Files.exists(normalized)) return normalized.toRealPath();
+            Path parent = normalized.getParent();
+            if (parent != null && Files.exists(parent)) return parent.toRealPath().resolve(normalized.getFileName());
+        } catch (IOException ignored) {}
+        return normalized;
+    }
+
+    private static boolean samePath(Path normalized, Path canonical, Path candidate) {
+        Path candidateNorm = candidate.toAbsolutePath().normalize();
+        if (normalized.equals(candidateNorm) || canonical.equals(candidateNorm)) return true;
+        Path candidateCanonical = canonicalPath(candidateNorm);
+        return normalized.equals(candidateCanonical) || canonical.equals(candidateCanonical);
+    }
+
+    private static void deleteRecursively(Path root) throws IOException {
+        try (var paths = Files.walk(root)) {
             for (var path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);
         }
     }

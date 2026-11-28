@@ -74,6 +74,26 @@ mainRepo.removeWorktree(Path.of("/tmp/wt-docs"));
 mainRepo.removeWorktreeForce(agent);
 ```
 
+## Locking and Unlocking Worktrees (`git worktree lock` / `unlock`)
+
+```java title="LockWorktree.java"
+Path wt = Path.of("/tmp/wt-docs");
+
+// Protect a linked worktree from pruning and removal
+mainRepo.lockWorktree(wt, "pinned on removable storage");
+// Or lock without a reason: mainRepo.lockWorktree(wt);
+
+// Allow pruning and removal again
+mainRepo.unlockWorktree(wt);
+```
+
+## Pruning Stale Worktrees (`git worktree prune`)
+
+```java title="PruneWorktrees.java"
+// Remove administrative entries for unlocked worktrees whose directories are gone
+List<Path> pruned = mainRepo.pruneWorktrees();
+```
+
 ## Concurrent Multi-Agent Commits with Virtual Threads
 
 Because each worktree owns its own index and operation lock, agents can commit in parallel and merge cleanly back into `main`:

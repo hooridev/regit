@@ -875,6 +875,26 @@ public final class Repository {
         removeWorktree(worktree.layout.root(), () -> liveWorktree(worktree), true);
     }
 
+    /** Lock a linked worktree to protect it from pruning and removal ({@code git worktree lock}). */
+    public void lockWorktree(Path worktreePath) throws IOException {
+        Worktrees.lock(layout, worktreePath, null);
+    }
+
+    /** Lock a linked worktree with a reason ({@code git worktree lock --reason}). */
+    public void lockWorktree(Path worktreePath, String reason) throws IOException {
+        Worktrees.lock(layout, worktreePath, reason);
+    }
+
+    /** Unlock a previously locked linked worktree ({@code git worktree unlock}). */
+    public void unlockWorktree(Path worktreePath) throws IOException {
+        Worktrees.unlock(layout, worktreePath);
+    }
+
+    /** Prune stale unlocked linked worktree metadata ({@code git worktree prune}), returning pruned worktree paths. */
+    public List<Path> pruneWorktrees() throws IOException {
+        return Worktrees.prune(layout);
+    }
+
     private Layout liveWorktree(Repository worktree) throws IOException {
         Layout expected = worktree.layout;
         if (expected.root() == null || !expected.common().equals(layout.common()))
