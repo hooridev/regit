@@ -115,7 +115,7 @@ final class Merges {
             entries.put(path, side);
         }
         for (var e : entries.entrySet()) {
-            work.materializeEntry(e.getKey(), e.getValue());
+            work.materializeEntry(e.getKey(), e.getValue(), false);
         }
     }
 

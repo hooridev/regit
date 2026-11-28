@@ -253,7 +253,9 @@ final class Stash {
             targets.addAll(outcome.conflicts().keySet());
             targets.addAll(untrackedFiles.keySet());
             for (String path : targets) if (isDirectory(work, path)) deleteEmptyTree(work.resolve(path));
-            Map<String, Index.Stat> written = work.forceReset(Set.of(), toWrite);
+            var created = new HashSet<>(toWrite.keySet()); // paths not in HEAD were preflighted as absent
+            created.removeIf(headFiles::containsKey);
+            Map<String, Index.Stat> written = work.forceReset(Set.of(), toWrite, created);
 
             // Write conflicted files with conflict markers
             for (var e : outcome.conflicts().entrySet()) {
@@ -265,7 +267,7 @@ final class Stash {
 
             // Restore untracked files from u
             for (var e : untrackedFiles.entrySet()) {
-                work.materializeEntry(e.getKey(), e.getValue());
+                work.materializeEntry(e.getKey(), e.getValue(), true); // preflighted as absent
             }
 
             // Build new index: stage-0 = HEAD entries (minus conflicts) + new paths relative to HEAD,
@@ -402,7 +404,7 @@ final class Stash {
             }
         }
         for (Path dir : directories) {
-            try { removeDirectory(dir); }
+            try { WorkingTree.removeDirectory(dir); }
             catch (IOException keep) {} // not empty, gone, no longer a directory, or not safely removable: leave it
         }
     }
@@ -410,23 +412,11 @@ final class Stash {
     /** Delete a tree of directories; a file found there (it appeared after our checks) is left alone. */
     private static void deleteEmptyTree(Path top) throws IOException {
         try (var dirs = Files.walk(top)) {
-            for (Path dir : dirs.sorted(Comparator.reverseOrder()).toList()) removeDirectory(dir);
+            for (Path dir : dirs.sorted(Comparator.reverseOrder()).toList()) WorkingTree.removeDirectory(dir);
         }
     }
 
-    /** rmdir: removes only an (empty) directory, never a file that took its place. */
-    private static void removeDirectory(Path dir) throws IOException {
-        try (var parent = Files.newDirectoryStream(dir.getParent())) {
-            if (parent instanceof SecureDirectoryStream<Path> secure) {
-                secure.deleteDirectory(dir.getFileName()); // unlinkat(AT_REMOVEDIR): fails for a file
-                return;
-            }
-        }
-        // No directory-only delete here (e.g. Windows): refuse rather than risk deleting a file.
-        throw new IOException("Cannot safely remove directory " + dir);
-    }
-
-    /** Fail before any change when {@link #removeDirectory} could not remove {@code dir} later. */
+    /** Fail before any change when {@link WorkingTree#removeDirectory} could not remove {@code dir} later. */
     private static void requireRemovable(Path dir) throws IOException {
         try (var parent = Files.newDirectoryStream(dir.getParent())) {
             if (!(parent instanceof SecureDirectoryStream)) throw new IOException("Cannot safely remove directory " + dir);
