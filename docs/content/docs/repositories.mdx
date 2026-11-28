@@ -22,6 +22,20 @@ Repository opened = Repository.open(Path.of("/tmp/demo"))
 boolean isBare = opened.isBare();
 ```
 
+### Reading Git Config & Identity
+
+Read effective configuration values across global (`$XDG_CONFIG_HOME/git/config`, `~/.gitconfig`), repository, and worktree config (`config.worktree` when `extensions.worktreeConfig` is enabled), or resolve the configured `user.name` and `user.email` into an `Identity`:
+
+```java title="ConfigIdentity.java"
+// Resolve user.name and user.email (empty if either is unset or blank)
+Optional<Identity> configured = repo.configuredIdentity();
+// withAuthor(name, email) stamps each commit with its own time; withAuthor(Identity) would reuse one timestamp
+Repository authored = configured.map(id -> repo.withAuthor(id.name(), id.email())).orElse(repo);
+
+// Read any config key (section.key or section.subsection.key)
+Optional<String> remoteUrl = repo.config("remote.origin.url");
+```
+
 ## Paths & HEAD State (`git rev-parse`)
 
 All common `rev-parse` metadata queries are directly available as strongly typed methods on `Repository`:

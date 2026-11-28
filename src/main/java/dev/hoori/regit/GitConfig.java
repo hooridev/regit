@@ -5,7 +5,7 @@ import java.nio.file.*;
 import java.util.*;
 import static dev.hoori.regit.GitFiles.Lock;
 
-/** Minimal Git-compatible reader and atomic writer for repository {@code config} sections (remotes & branch tracking). */
+/** Minimal Git-compatible reader and atomic writer for Git {@code config} files. */
 final class GitConfig {
     record Section(String type, String subsection, List<String> lines) {
         boolean matches(String expectedType, String expectedSub) {
@@ -16,6 +16,69 @@ final class GitConfig {
     record Upstream(String remote, String branch) {}
 
     private GitConfig() {}
+
+    static Optional<String> get(Layout layout, String key, Map<String, String> env) throws IOException {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(env, "env");
+        int firstDot = key.indexOf('.');
+        int lastDot = key.lastIndexOf('.');
+        if (firstDot <= 0 || lastDot == key.length() - 1) {
+            throw new IllegalArgumentException("Invalid config key: " + key);
+        }
+        String section = key.substring(0, firstDot);
+        String subsection = firstDot == lastDot ? null : key.substring(firstDot + 1, lastDot);
+        String name = key.substring(lastDot + 1);
+
+        Optional<String> found = null;
+        for (Path global : globalFiles(env)) {
+            Optional<String> v = lookup(parse(global), section, subsection, name);
+            if (v != null) found = v;
+        }
+        List<Section> common = parse(layout.common().resolve("config"));
+        Optional<String> localValue = lookup(common, section, subsection, name);
+        if (localValue != null) found = localValue;
+        Optional<String> worktreeConfig = lookup(common, "extensions", null, "worktreeConfig");
+        if (worktreeConfig != null && isTrue(worktreeConfig.orElse("true"))) {
+            Optional<String> worktreeValue = lookup(parse(layout.admin().resolve("config.worktree")), section, subsection, name);
+            if (worktreeValue != null) found = worktreeValue;
+        }
+        // a valueless entry reads as "" like `git config <key>`
+        return found == null ? Optional.empty() : Optional.of(found.orElse(""));
+    }
+
+    private static List<Path> globalFiles(Map<String, String> env) {
+        String home = env.get("HOME");
+        String xdg = env.get("XDG_CONFIG_HOME");
+        var files = new ArrayList<Path>(2);
+        if (xdg != null && !xdg.isEmpty()) {
+            files.add(Path.of(xdg, "git", "config"));
+        } else if (home != null && !home.isEmpty()) {
+            files.add(Path.of(home, ".config", "git", "config"));
+        }
+        if (home != null && !home.isEmpty()) {
+            files.add(Path.of(home, ".gitconfig"));
+        }
+        return files;
+    }
+
+    private static Optional<String> lookup(List<Section> sections, String type, String subsection, String key) {
+        Optional<String> found = null;
+        for (Section s : sections) {
+            if (s.matches(type, subsection)) {
+                Optional<String> v = entry(s, key);
+                if (v != null) found = v;
+            }
+        }
+        return found;
+    }
+
+    private static boolean isTrue(String value) {
+        if (value == null) return false;
+        return switch (value.toLowerCase(Locale.ROOT)) {
+            case "true", "yes", "on", "1" -> true;
+            default -> false;
+        };
+    }
 
     static Map<String, String> remotes(Layout layout) throws IOException {
         var result = new TreeMap<String, String>();
@@ -44,7 +107,7 @@ final class GitConfig {
             }
             var lines = new ArrayList<String>();
             lines.add("[remote \"" + escape(name) + "\"]");
-            lines.add("\turl = " + url);
+            lines.add("\turl = " + encode(url));
             lines.add("\tfetch = +refs/heads/*:refs/remotes/" + name + "/*");
             sections.add(new Section("remote", name, lines));
             lock.publish(serialize(sections));
@@ -142,7 +205,14 @@ final class GitConfig {
         for (String raw : Files.readAllLines(file)) {
             String stripped = raw.strip();
             if (stripped.startsWith("[")) {
-                int end = stripped.indexOf(']');
+                int end = -1;
+                boolean quoted = false;
+                for (int i = 1; i < stripped.length() && end < 0; i++) {
+                    char c = stripped.charAt(i);
+                    if (quoted && c == '\\') i++;
+                    else if (c == '"') quoted = !quoted;
+                    else if (!quoted && c == ']') end = i;
+                }
                 if (end < 0) throw new IOException("Invalid Git config section: " + raw);
                 String header = stripped.substring(1, end).strip();
                 String type;
@@ -175,31 +245,58 @@ final class GitConfig {
     }
 
     private static String value(Section section, String key) {
-        String found = null;
+        Optional<String> found = entry(section, key);
+        return found == null ? null : found.orElse("true");
+    }
+
+    /** Last entry for {@code key}: null when absent, empty for a valueless entry (Git's implicit boolean true). */
+    private static Optional<String> entry(Section section, String key) {
+        Optional<String> found = null;
         for (int i = 1; i < section.lines().size(); i++) {
             String line = section.lines().get(i).strip();
             if (line.isEmpty() || line.startsWith("#") || line.startsWith(";")) continue;
             int eq = line.indexOf('=');
             String k = (eq < 0 ? line : line.substring(0, eq)).strip();
             if (!k.equalsIgnoreCase(key)) continue;
-            String v = eq < 0 ? "true" : stripInlineComment(line.substring(eq + 1).strip());
-            if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
-                v = unescape(v.substring(1, v.length() - 1));
-            }
-            found = v;
+            found = eq < 0 ? Optional.empty() : Optional.of(decode(line.substring(eq + 1).strip()));
         }
         return found;
     }
 
-    private static String stripInlineComment(String raw) {
-        boolean inQuotes = false;
+    /** Git value syntax: quotes group, backslash escapes, unquoted {@code #}/{@code ;} start a comment, unquoted trailing space is dropped. */
+    private static String decode(String raw) {
+        var out = new StringBuilder(raw.length());
+        boolean quoted = false;
+        int keep = 0;
         for (int i = 0; i < raw.length(); i++) {
             char c = raw.charAt(i);
-            if (c == '\\' && i + 1 < raw.length()) { i++; continue; }
-            if (c == '"') inQuotes = !inQuotes;
-            else if (!inQuotes && (c == '#' || c == ';')) return raw.substring(0, i).stripTrailing();
+            if (c == '"') { quoted = !quoted; keep = out.length(); continue; }
+            if (!quoted && (c == '#' || c == ';')) break;
+            if (c == '\\' && i + 1 < raw.length()) {
+                char n = raw.charAt(++i);
+                // Git rejects other escapes; keeping them literal still reads URLs older regit wrote unescaped (C:\repos\x).
+                // shortcut: such legacy paths containing \n, \t or \b still decode, re-add the remote if one breaks.
+                switch (n) {
+                    case 'n' -> out.append('\n');
+                    case 't' -> out.append('\t');
+                    case 'b' -> out.append('\b');
+                    case '\\', '"' -> out.append(n);
+                    default -> out.append('\\').append(n);
+                }
+                keep = out.length();
+                continue;
+            }
+            out.append(c);
+            if (quoted || !Character.isWhitespace(c)) keep = out.length();
         }
-        return raw;
+        return out.substring(0, keep);
+    }
+
+    /** Inverse of {@link #decode} for values regit writes. */
+    private static String encode(String value) {
+        String escaped = escape(value);
+        boolean quote = !value.equals(value.strip()) || value.indexOf('#') >= 0 || value.indexOf(';') >= 0;
+        return quote ? "\"" + escaped + "\"" : escaped;
     }
 
     private static void setKey(List<String> lines, String key, String value) {

@@ -104,4 +104,163 @@ class ErgonomicsTest {
         git(dirA, "fsck", "--strict");
         git(dirB, "fsck", "--strict");
     }
+
+    @Test void configLookupAndConfiguredIdentityPrecedence() throws Exception {
+        Path home = tmp.resolve("home");
+        Path xdg = tmp.resolve("xdg");
+        Path repoDir = tmp.resolve("cfg-repo");
+        Repository repo = Repository.init(repoDir);
+        Path localConfig = repo.commonDir().resolve("config");
+
+        Map<String, String> emptyEnv = Map.of();
+        Map<String, String> homeEnv = Map.of("HOME", home.toString());
+        Map<String, String> xdgEnv = Map.of("HOME", home.toString(), "XDG_CONFIG_HOME", xdg.toString());
+
+        // Missing config and unset HOME -> Optional.empty() without reading host ~/.gitconfig
+        assertEquals(Optional.empty(), repo.config("user.name", emptyEnv));
+        assertEquals(Optional.empty(), repo.configuredIdentity(emptyEnv));
+        assertEquals(Optional.empty(), repo.configuredIdentity(homeEnv));
+
+        // Invalid dotted keys are rejected
+        assertThrows(IllegalArgumentException.class, () -> repo.config("user", emptyEnv));
+        assertThrows(IllegalArgumentException.class, () -> repo.config(".name", emptyEnv));
+        assertThrows(IllegalArgumentException.class, () -> repo.config("user.", emptyEnv));
+
+        // Fallback XDG path ($HOME/.config/git/config): partial identity returns empty
+        writeFile(home, ".config/git/config", "[user]\n\tname = Xdg Default\n");
+        assertEquals(Optional.of("Xdg Default"), repo.config("user.name", homeEnv));
+        assertEquals(Optional.empty(), repo.configuredIdentity(homeEnv));
+        writeFile(home, ".config/git/config", "[user]\n\tname = Xdg Default\n\temail =\n");
+        assertEquals(Optional.empty(), repo.configuredIdentity(homeEnv));
+
+        // Explicit XDG_CONFIG_HOME overrides default $HOME/.config/git/config
+        writeFile(xdg, "git/config", "[user]\n\tname = Xdg Explicit\n\temail = xdg@example.org\n");
+        Identity fromXdg = repo.configuredIdentity(xdgEnv).orElseThrow();
+        assertEquals("Xdg Explicit", fromXdg.name());
+        assertEquals("xdg@example.org", fromXdg.email());
+
+        // ~/.gitconfig overrides XDG; values from different files combine cleanly
+        writeFile(home, ".gitconfig", "[user]\n\tname = Global User\n");
+        Identity combined = repo.configuredIdentity(xdgEnv).orElseThrow();
+        assertEquals("Global User", combined.name());
+        assertEquals("xdg@example.org", combined.email());
+
+        writeFile(home, ".gitconfig", "[user]\n\tname = Global User\n\temail = global@example.org\n");
+        Identity fromGitconfig = repo.configuredIdentity(xdgEnv).orElseThrow();
+        assertEquals("Global User", fromGitconfig.name());
+        assertEquals("global@example.org", fromGitconfig.email());
+
+        // Local <commonDir>/config overrides global; commits still require explicit withAuthor
+        String baseConfig = Files.readString(localConfig);
+        Files.writeString(localConfig, baseConfig + """
+                [user]
+                \tname = "Local #1" ; inline comment
+                \temail = local@example.org
+                [url "https://git.example.com/"]
+                \tinsteadOf = gh:
+                """);
+        Identity fromLocal = repo.configuredIdentity(xdgEnv).orElseThrow();
+        assertEquals("Local #1", fromLocal.name());
+        assertEquals("local@example.org", fromLocal.email());
+        assertEquals(Optional.of("Local #1"), repo.config("USER.NAME", xdgEnv));
+
+        writeFile(repoDir, "a.txt", "hello\n");
+        repo.stageAll();
+        assertThrows(IllegalStateException.class, () -> repo.commit("must not auto-use config\n"));
+
+        // Subsection lookups (including dots in subsection and case-sensitive subsection match)
+        repo.addRemote("origin", "https://example.org/org/repo.git");
+        assertEquals(Optional.of("https://example.org/org/repo.git"), repo.config("remote.origin.url", emptyEnv));
+        assertEquals(Optional.empty(), repo.config("remote.Origin.url", emptyEnv));
+        assertEquals(Optional.of("gh:"), repo.config("url.https://git.example.com/.insteadOf", emptyEnv));
+
+        // Invalid configured value throws as Identity does
+        Path badDir = tmp.resolve("bad-identity");
+        Repository badRepo = Repository.init(badDir);
+        Files.writeString(badRepo.commonDir().resolve("config"),
+                Files.readString(badRepo.commonDir().resolve("config")) + "[user]\n\tname = Bad <Name>\n\temail = a@b.c\n");
+        assertThrows(IllegalArgumentException.class, () -> badRepo.configuredIdentity(emptyEnv));
+    }
+
+    @Test void configValuesFollowGitSyntax() throws Exception {
+        Path home = tmp.resolve("syntax-home");
+        Map<String, String> env = Map.of("HOME", home.toString());
+        Path dir = tmp.resolve("syntax-repo");
+        Repository repo = Repository.init(dir);
+
+        // A ']' inside a quoted subsection (IPv6 URL rewrite) does not end the section header
+        writeFile(home, ".gitconfig", "[url \"ssh://git@[2001:db8::1]/\"]\n\tinsteadOf = v6:\n");
+        assertEquals(Optional.of("v6:"), repo.config("url.ssh://git@[2001:db8::1]/.insteadOf", env));
+
+        // Values written by native git decode back to what was set
+        git(dir, "config", "user.name", "Sam \"Ace\" Example");
+        git(dir, "config", "user.email", "  sam@example.org #1");
+        Identity sam = repo.configuredIdentity(env).orElseThrow();
+        assertEquals("Sam \"Ace\" Example", sam.name());
+        assertEquals(Optional.of("  sam@example.org #1"), repo.config("user.email", env));
+
+        // A valueless entry is not an email (git rejects it too)
+        Files.writeString(repo.commonDir().resolve("config"),
+                Files.readString(repo.commonDir().resolve("config")) + "[user]\n\temail\n");
+        assertEquals(Optional.of(""), repo.config("user.email", env));
+        assertEquals(Optional.empty(), repo.configuredIdentity(env));
+
+        // URLs regit writes read back unchanged, in regit and in git
+        String url = "C:\\repos\\x #1;y";
+        repo.addRemote("win", url);
+        assertEquals(Optional.of(url), repo.config("remote.win.url", env));
+        assertEquals(url, repo.remote("win").url());
+        assertEquals(url, git(dir, "config", "remote.win.url").strip());
+
+        // URLs older regit versions wrote without escaping still read back unchanged
+        Files.writeString(repo.commonDir().resolve("config"),
+                Files.readString(repo.commonDir().resolve("config")) + "[remote \"legacy\"]\n\turl = C:\\repos\\x\n");
+        assertEquals("C:\\repos\\x", repo.remote("legacy").url());
+    }
+
+    @Test void configLookupInLinkedWorktreeAndWorktreeConfigExtension() throws Exception {
+        Path home = tmp.resolve("wt-home");
+        Map<String, String> env = Map.of("HOME", home.toString());
+        writeFile(home, ".gitconfig", "[user]\n\tname = Global\n\temail = global@example.org\n");
+
+        Path mainDir = tmp.resolve("wt-main");
+        Repository main = Repository.init(mainDir).withAuthor("Init", "init@example.org");
+        writeFile(mainDir, "file.txt", "v1\n");
+        main.stageAll();
+        main.commit("init\n");
+
+        Path commonConfig = main.commonDir().resolve("config");
+        String initialConfig = Files.readString(commonConfig);
+        Files.writeString(commonConfig, initialConfig + "[user]\n\tname = Repo Common\n");
+
+        Path linkedDir = tmp.resolve("wt-linked");
+        Repository linked = main.addWorktreeNewBranch(linkedDir, "feature");
+
+        // Linked worktree reads <commonDir>/config and falls back to global for unset keys
+        Identity linkedIdentity = linked.configuredIdentity(env).orElseThrow();
+        assertEquals("Repo Common", linkedIdentity.name());
+        assertEquals("global@example.org", linkedIdentity.email());
+
+        // config.worktree is ignored unless extensions.worktreeConfig = true in common config
+        Path wtConfig = linked.gitDir().resolve("config.worktree");
+        Files.writeString(wtConfig, "[user]\n\tname = Worktree Local\n\temail = wt@example.org\n");
+        assertEquals("Repo Common", linked.configuredIdentity(env).orElseThrow().name());
+        assertEquals("global@example.org", linked.configuredIdentity(env).orElseThrow().email());
+
+        // Enabling extensions.worktreeConfig in common config activates config.worktree for that worktree only
+        Files.writeString(commonConfig, initialConfig + """
+                [extensions]
+                \tworktreeConfig = true
+                [user]
+                \tname = Repo Common
+                """);
+        Identity wtIdentity = linked.configuredIdentity(env).orElseThrow();
+        assertEquals("Worktree Local", wtIdentity.name());
+        assertEquals("wt@example.org", wtIdentity.email());
+
+        // Main worktree still uses common + global since its own config.worktree does not exist
+        Identity mainIdentity = main.configuredIdentity(env).orElseThrow();
+        assertEquals("Repo Common", mainIdentity.name());
+        assertEquals("global@example.org", mainIdentity.email());
+    }
 }

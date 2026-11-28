@@ -230,6 +230,28 @@ public final class Repository {
         return new Repository(layout, lifecycle, contentMerge, () -> identity);
     }
 
+    /** Read the effective value of a Git configuration key (e.g. {@code "user.name"} or {@code "remote.origin.url"}). */
+    public Optional<String> config(String key) throws IOException {
+        return config(key, System.getenv());
+    }
+
+    Optional<String> config(String key, Map<String, String> env) throws IOException {
+        return GitConfig.get(layout, key, env);
+    }
+
+    /** Resolve {@code user.name} and {@code user.email} from Git config, or empty if either is unset or blank. */
+    public Optional<Identity> configuredIdentity() throws IOException {
+        return configuredIdentity(System.getenv());
+    }
+
+    Optional<Identity> configuredIdentity(Map<String, String> env) throws IOException {
+        Optional<String> name = config("user.name", env).filter(v -> !v.isBlank());
+        if (name.isEmpty()) return Optional.empty();
+        Optional<String> email = config("user.email", env).filter(v -> !v.isBlank());
+        if (email.isEmpty()) return Optional.empty();
+        return Optional.of(Identity.now(name.get(), email.get()));
+    }
+
     private Identity requireAuthor() {
         if (defaultAuthor == null) {
             throw new IllegalStateException("No default author configured; call withAuthor(...) or pass an Identity");
