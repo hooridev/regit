@@ -1,6 +1,7 @@
 package dev.hoori.regit;
 
 import java.io.*;
+import java.nio.channels.Channels;
 import java.nio.file.*;
 import java.nio.file.attribute.*;
 import java.util.*;
@@ -121,8 +122,14 @@ final class WorkingTree {
         Path file = resolve(name), aside = file.resolveSibling(".regit-" + UUID.randomUUID());
         try { Files.move(file, aside, StandardCopyOption.ATOMIC_MOVE); } // atomically takes whatever is there now
         catch (NoSuchFileException gone) { return; }
-        if (Files.isRegularFile(aside, NOFOLLOW_LINKS) && db.blob(aside, false).equals(ours.hash())) Files.delete(aside);
-        else { publish(aside, file, true); Files.delete(aside); } // not ours: put back; if that fails it stays aside
+        boolean owned;
+        try { owned = Files.isRegularFile(aside, NOFOLLOW_LINKS) && db.blob(aside, false).equals(ours.hash()); }
+        catch (IOException unreadable) { owned = false; } // cannot prove it is ours: put it back
+        if (owned) Files.delete(aside);
+        // Not ours: put it back without replacing anything; if that fails it stays aside.
+        // rename(2) never replaces a file or a non-empty directory; link(2) never replaces anything.
+        else if (Files.isDirectory(aside, NOFOLLOW_LINKS)) Files.move(aside, file, StandardCopyOption.ATOMIC_MOVE);
+        else { Files.createLink(file, aside); Files.delete(aside); }
     }
 
     /** Write arbitrary bytes to a worktree file (e.g. conflict markers), creating parent directories. */
@@ -217,7 +224,12 @@ final class WorkingTree {
         catch (UnsupportedOperationException | FileSystemException noLink) {
             if (noLink instanceof FileAlreadyExistsException exists) throw exists;
             // No hard links (e.g. FAT): CREATE_NEW is O_EXCL, like Git; readers may see a partial file, never a replaced one.
-            try (var out = Files.newOutputStream(file, StandardOpenOption.CREATE_NEW)) { Files.copy(tmp, out); }
+            // The prepared mode is set at creation (less umask, as Git does), never later by path.
+            var mode = Files.getFileStore(tmp).supportsFileAttributeView(PosixFileAttributeView.class)
+                    ? new FileAttribute<?>[] {PosixFilePermissions.asFileAttribute(Files.getPosixFilePermissions(tmp))}
+                    : new FileAttribute<?>[0];
+            try (var out = Channels.newOutputStream(Files.newByteChannel(file,
+                    Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE), mode))) { Files.copy(tmp, out); }
         }
     }
 

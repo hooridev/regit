@@ -429,6 +429,13 @@ class BranchCheckoutWorktreeTest {
         assertThrows(IOException.class, () -> work.checkout(Map.of(), Map.of("n.txt", entry), Map.of(),
                 written -> { Files.writeString(file, "theirs\n"); throw new IOException("publish failed"); }));
         assertEquals("theirs\n", Files.readString(file));
+        Files.delete(file);
+        assertThrows(IOException.class, () -> work.checkout(Map.of(), Map.of("n.txt", entry), Map.of(), written -> {
+            Files.delete(file);
+            writeFile(file, "inner.txt", "theirs\n");
+            throw new IOException("publish failed");
+        }));
+        assertEquals("theirs\n", Files.readString(file.resolve("inner.txt")));
     }
 
     @Test void publishOfNewFileNeverReplacesOneThatAppeared() throws Exception {
