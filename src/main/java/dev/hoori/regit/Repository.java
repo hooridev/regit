@@ -1397,6 +1397,66 @@ public final class Repository {
         });
     }
 
+    /** Stash staged and unstaged changes using the default author ({@code git stash push}). */
+    public Optional<StashEntry> stashPush() throws IOException {
+        return stashPush(requireAuthor(), StashOptions.defaults());
+    }
+
+    /** Stash changes with {@link StashOptions} using the default author ({@code git stash push}). */
+    public Optional<StashEntry> stashPush(StashOptions options) throws IOException {
+        return stashPush(requireAuthor(), options);
+    }
+
+    /** Stash staged and unstaged changes ({@code git stash push}). */
+    public Optional<StashEntry> stashPush(Identity who) throws IOException {
+        return stashPush(who, StashOptions.defaults());
+    }
+
+    /** Stash changes with {@link StashOptions} ({@code git stash push}). Returns empty when there is nothing to stash. */
+    public Optional<StashEntry> stashPush(Identity who, StashOptions options) throws IOException {
+        return Stash.push(layout, db, trees, who, options);
+    }
+
+    /** List stash entries from newest ({@code stash@{0}}) to oldest ({@code git stash list}). */
+    public List<StashEntry> stashList() throws IOException {
+        return Stash.list(layout, db);
+    }
+
+    /** Apply the newest stash entry ({@code stash@{0}}) without dropping it ({@code git stash apply}). */
+    public StashApplyResult stashApply() throws IOException {
+        return stashApply(0);
+    }
+
+    /** Apply stash entry {@code stash@{index}} without dropping it ({@code git stash apply stash@{n}}). */
+    public StashApplyResult stashApply(int index) throws IOException {
+        return Stash.apply(layout, db, trees, contentMerge, index);
+    }
+
+    /** Apply the newest stash entry and drop it when there are no conflicts ({@code git stash pop}). */
+    public StashApplyResult stashPop() throws IOException {
+        return stashPop(0);
+    }
+
+    /** Apply stash entry {@code stash@{index}} and drop it only if there are no conflicts ({@code git stash pop stash@{n}}). */
+    public StashApplyResult stashPop(int index) throws IOException {
+        return Stash.pop(layout, db, trees, contentMerge, index);
+    }
+
+    /** Drop the newest stash entry ({@code git stash drop}). */
+    public void stashDrop() throws IOException {
+        stashDrop(0);
+    }
+
+    /** Drop stash entry {@code stash@{index}} ({@code git stash drop stash@{n}}). */
+    public void stashDrop(int index) throws IOException {
+        Stash.drop(layout, index);
+    }
+
+    /** Remove all stash entries ({@code git stash clear}). */
+    public void stashClear() throws IOException {
+        Stash.clear(layout, db);
+    }
+
     /** Internal fast-forward/merge helper used by {@code pull}. */
     private String integrate(String source, Identity who, String message, boolean replay) throws IOException {
         return Merges.merge(layout, db, trees, contentMerge, source, source, who,

@@ -140,3 +140,34 @@ Commit trigger = repo.commit("chore: trigger build\n", author,
 <Callout type="info" title="Detached HEAD & concluding merges">
   `commit(...)` works both on local branches and on a **detached HEAD**. When a merge is paused (`MERGE_HEAD` exists) and all conflicts are staged, `commit(...)` automatically writes a 2-parent merge commit and cleans up merge state.
 </Callout>
+
+## Stashing Changes (`git stash`)
+
+Save dirty working-tree and index changes to Git's standard `refs/stash` reflog (shared across linked worktrees and interoperable with native `git stash`) and restore them later:
+
+```java title="StashWorkflow.java"
+Repository authored = repo.withAuthor("Alix", "alix@example.org");
+
+// 1. Push staged and unstaged changes (returns Optional.empty() when clean)
+Optional<StashEntry> saved = authored.stashPush();
+// ...or with a custom message and untracked non-ignored files (`git stash push -u -m ...`)
+// Optional<StashEntry> saved = authored.stashPush(
+//     StashOptions.defaults().message("wip: draft parser").includeUntracked());
+
+// 2. List stashes from newest (stash@{0}) to oldest (`git stash list`)
+for (StashEntry entry : repo.stashList()) {
+    System.out.printf("stash@{%d}: %s (%s)%n",
+        entry.index(), entry.message(), entry.when());
+}
+
+// 3. Pop stash@{0} (`git stash pop`), or stashApply() to keep it
+StashApplyResult result = repo.stashPop();
+if (result.isConflicted()) {
+    // Conflict markers and index stages 1..3 are written; pop keeps the stash entry
+    System.out.println("Resolve conflicts in: " + result.conflicts());
+}
+
+// To discard stashes instead of restoring them (`git stash drop` / `git stash clear`):
+// repo.stashDrop(1);  // removes stash@{1}
+// repo.stashClear();  // removes all
+```
