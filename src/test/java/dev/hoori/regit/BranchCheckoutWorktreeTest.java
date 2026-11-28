@@ -364,9 +364,25 @@ class BranchCheckoutWorktreeTest {
         Files.copy(wt.resolve(".git"), copy.resolve(".git"));
         assertThrows(IOException.class, () -> repo.unlockWorktree(copy));
 
+        // A gitdir file that cannot be read (here: not UTF-8) is no reason to prune
+        Path unreadable = root.resolve(".git/worktrees/unreadable");
+        Files.createDirectories(unreadable);
+        Files.write(unreadable.resolve("gitdir"), new byte[]{(byte) 0xff, (byte) 0xfe, '\n'});
+
         // Prune takes only the stale registration; the locked live checkout stays
         assertEquals(List.of(wt.toRealPath()), repo.pruneWorktrees());
         assertTrue(Files.isRegularFile(wt.resolve(".git")));
+        assertTrue(Files.isDirectory(unreadable));
+        assertEquals(2, repo.worktreeList().size()); // the unreadable entry is skipped, the others still list
+        // ...and does not block locking an offline worktree found by scanning the registry
+        Path offline = tmp.resolve("wt-offline");
+        repo.addWorktreeNewBranch(offline, "feat/offline");
+        Path offlineReal = offline.toRealPath();
+        deleteTree(offline);
+        repo.lockWorktree(offline, "on a usb drive");
+        repo.unlockWorktree(offline);
+        deleteTree(unreadable);
+        assertEquals(List.of(offlineReal), repo.pruneWorktrees());
         repo.unlockWorktree(wt);
 
         // A dangling .git pointer (repository moved) is for repair, not prune

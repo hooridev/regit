@@ -1,7 +1,9 @@
 package dev.hoori.regit;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import static dev.hoori.regit.GitFiles.*;
 
@@ -39,7 +41,8 @@ final class Worktrees {
         if (Files.isDirectory(registry)) {
             try (var dirs = Files.list(registry)) {
                 for (var dir : dirs.sorted().toList()) {
-                    Path gitfile = readGitfile(dir);
+                    Path gitfile;
+                    try { gitfile = readGitfile(dir); } catch (IOException unreadable) { continue; } // as git: skip it
                     if (gitfile == null || gitfile.getParent() == null) continue;
                     result.add(inspectEntry(layout, db, gitfile.getParent(), dir, gitfile));
                 }
@@ -132,8 +135,7 @@ final class Worktrees {
             return child;
         } catch (IOException e) {
             if (admin != null) {
-                try (var paths = Files.list(admin)) { for (Path p : paths.toList()) Files.delete(p); }
-                Files.delete(admin);
+                try { deleteRecursively(admin); } catch (IOException | UncheckedIOException cleanup) { e.addSuppressed(cleanup); }
             }
             try { Files.delete(dest); } catch (IOException cleanup) { e.addSuppressed(cleanup); }
             throw e;
@@ -214,8 +216,13 @@ final class Worktrees {
             for (var dir : dirs.sorted().toList()) {
                 if (!Files.isDirectory(dir)) continue;
                 if (Files.exists(dir.resolve("locked"))) continue;
-                Path gitfile = readGitfile(dir);
-                if (gitfile != null && !stale(dir, gitfile)) continue;
+                Path gitfile;
+                try {
+                    gitfile = readGitfile(dir);
+                    if (gitfile != null && !stale(dir, gitfile)) continue;
+                } catch (IOException unreadable) {
+                    continue; // metadata we cannot read is no proof the checkout is gone
+                }
                 deleteRecursively(dir);
                 if (gitfile != null && gitfile.getParent() != null) pruned.add(gitfile.getParent());
             }
@@ -240,21 +247,26 @@ final class Worktrees {
             String link = line(pointer);
             if (link.startsWith("gitdir: ")) {
                 Path admin = canonical.resolve(link.substring(8)).normalize();
-                Path backlink = Files.isDirectory(admin) ? readGitfile(admin) : null;
-                if (backlink != null && admin.toRealPath().getParent().equals(registry.toRealPath())
-                        && samePath(normalized, canonical, backlink.getParent())) return admin;
+                if (Files.isDirectory(admin) && registry.toRealPath().equals(admin.toRealPath().getParent())) {
+                    Path backlink = readGitfile(admin);
+                    if (backlink != null && samePath(normalized, canonical, backlink.getParent())) return admin;
+                }
             }
         }
         var matches = new ArrayList<Path>();
+        IOException unreadable = null;
         try (var dirs = Files.list(registry)) {
             for (var dir : dirs.sorted().toList()) {
                 if (!Files.isDirectory(dir)) continue;
-                Path gitfile = readGitfile(dir);
+                Path gitfile;
+                try { gitfile = readGitfile(dir); }
+                catch (IOException e) { unreadable = e; continue; } // another entry's problem unless nothing matches
                 if (gitfile != null && gitfile.getParent() != null
                         && samePath(normalized, canonical, gitfile.getParent())) matches.add(dir);
             }
         }
         if (matches.size() == 1) return matches.get(0);
+        if (matches.isEmpty() && unreadable != null) throw unreadable;
         throw new IOException((matches.isEmpty() ? "Worktree not found: " : "Worktree registered more than once: ")
                 + worktreePath);
     }
@@ -264,29 +276,44 @@ final class Worktrees {
                 ? layout.root() : layout.common().getParent();
     }
 
-    private static Path readGitfile(Path adminDir) {
+    /** The checkout's {@code .git} path, or null when the gitdir file is missing or invalid; read failures throw. */
+    private static Path readGitfile(Path adminDir) throws IOException {
         Path gitdir = adminDir.resolve("gitdir");
-        if (!Files.isRegularFile(gitdir)) return null;
         try {
-            String raw = line(gitdir);
+            if (!Files.readAttributes(gitdir, BasicFileAttributes.class).isRegularFile()) return null;
+        } catch (NoSuchFileException missing) {
+            return null;
+        }
+        String raw = line(gitdir);
+        try {
             return raw.isEmpty() ? null : adminDir.resolve(raw).normalize();
-        } catch (IOException | InvalidPathException e) {
+        } catch (InvalidPathException e) {
             return null;
         }
     }
 
     /** The checkout is gone, or its {@code .git} file now belongs to another registration (path reused). */
     private static boolean stale(Path adminDir, Path gitfile) throws IOException {
-        if (!Files.exists(gitfile)) return true;
-        if (!Files.isRegularFile(gitfile)) return false;
-        String link = line(gitfile);
-        if (!link.startsWith("gitdir: ")) return false;
-        Path target = gitfile.getParent().resolve(link.substring(8)).normalize();
-        // Stale only when another registration claims this checkout. A dangling or foreign pointer
-        // (repository moved, .git copied) is kept, as git does: repair, not prune.
-        if (!Files.isDirectory(target) || Files.isSameFile(target, adminDir)) return false;
-        Path claimed = readGitfile(target);
-        return claimed != null && Files.exists(claimed) && Files.isSameFile(claimed, gitfile);
+        try {
+            // Only a confirmed missing .git is gone; an access error (Files.exists says false) is not.
+            if (!Files.readAttributes(gitfile, BasicFileAttributes.class).isRegularFile()) return false;
+        } catch (NoSuchFileException gone) {
+            return true;
+        } catch (IOException unreadable) {
+            return false;
+        }
+        try {
+            String link = line(gitfile);
+            if (!link.startsWith("gitdir: ")) return false;
+            Path target = gitfile.getParent().resolve(link.substring(8)).normalize();
+            // Stale only when another registration claims this checkout. A dangling, foreign or unreadable
+            // pointer (repository moved, .git copied) is kept, as git does: repair, not prune.
+            if (!Files.isDirectory(target) || Files.isSameFile(target, adminDir)) return false;
+            Path claimed = readGitfile(target);
+            return claimed != null && Files.exists(claimed) && Files.isSameFile(claimed, gitfile);
+        } catch (IOException | InvalidPathException unreadable) {
+            return false;
+        }
     }
 
     private static Path canonicalPath(Path normalized) {
